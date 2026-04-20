@@ -82,6 +82,47 @@ Workspace MCP is the single most complete MCP server that integrates all major G
 
 **Simplified Setup**: can use Google Desktop OAuth clients for local runs - no redirect URIs or port configuration needed!
 
+## <span style="color:#adbcbc">Using this fork (AeyeOps)</span>
+
+> This fork adds tools that aren't in the upstream PyPI release yet (Chat memberships, group-chat discovery, find-DM, etc.). Point your MCP client directly at the git repo via `uvx` — no clone, no `uv tool install`, no PyPI.
+
+**Prerequisite:** `uv` installed ([`curl -LsSf https://astral.sh/uv/install.sh | sh`](https://docs.astral.sh/uv/)).
+
+**One-time command line test:**
+
+```bash
+uvx --from git+https://github.com/AeyeOps/google_workspace_mcp.git workspace-mcp --help
+```
+
+First run clones + builds into uv's cache (~10s); subsequent launches reuse the cache (~1s).
+
+**Claude Code / Claude Desktop MCP config** — add to your `~/.claude.json` (or `claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "workspace": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": [
+        "--from", "git+https://github.com/AeyeOps/google_workspace_mcp.git",
+        "workspace-mcp",
+        "--tool-tier", "complete"
+      ],
+      "env": {
+        "GOOGLE_CLIENT_SECRET_PATH": "~/.workspace-mcp/client_secret.json"
+      }
+    }
+  }
+}
+```
+
+**Pin a release for reproducibility** — append `@<tag>` to the git URL, e.g. `git+https://github.com/AeyeOps/google_workspace_mcp.git@v1.20.0`. Leaving it unpinned tracks `aeyeops-main`; refresh with `uv cache clean` or add `--refresh` to `args`.
+
+**Windows** — same config, but use an absolute path for the client-secret env var (e.g. `"C:/Users/<you>/.workspace-mcp/client_secret.json"`).
+
+Credentials setup (Google Cloud OAuth client + `client_secret.json`) follows the [Configuration](#configuration) section below — everything there applies once the command is wired.
+
 
 ## <span style="color:#adbcbc">Features</span>
 
