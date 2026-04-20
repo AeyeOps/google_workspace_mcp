@@ -102,8 +102,12 @@ chat:
     - list_spaces
     - get_space
     - find_direct_message
+    - find_group_chats
+    - list_space_members
     - download_chat_attachment
-  complete: []
+  complete:
+    - join_space
+    - leave_space
 
 forms:
   core:

@@ -813,3 +813,215 @@ async def find_direct_message(
         lines.append(f"  Created: {create_time}")
 
     return "\n".join(lines)
+
+
+@server.tool()
+@require_google_service("chat", "chat_memberships_readonly")
+@handle_http_errors("find_group_chats", is_read_only=True, service_type="chat")
+async def find_group_chats(
+    service,
+    user_google_email: str,
+    users: List[str],
+) -> str:
+    """
+    Finds group-chat spaces whose membership is EXACTLY the caller plus the
+    supplied users.
+
+    Wraps spaces.findGroupChats. This is an exact-match lookup, not a fuzzy
+    search: the resulting spaces contain precisely {caller} ∪ {users} and no
+    others. Empty result means no such group chat exists.
+
+    Args:
+        users: Other participants to match. Each entry may be:
+               - full resource name: "users/123456789"
+               - bare numeric ID:    "123456789"
+               Numeric IDs are required for third parties — email aliases
+               work only for the caller's own user (per Chat API). Maximum
+               49 entries (API limit).
+
+    Returns:
+        str: Formatted list of matching group-chat spaces, or an empty-result
+             message if none match.
+    """
+    if len(users) > 49:
+        raise ValueError(
+            f"find_group_chats supports at most 49 users; got {len(users)}"
+        )
+
+    normalized = [u if u.startswith("users/") else f"users/{u}" for u in users]
+    logger.info(
+        f"[find_group_chats] Caller: '{user_google_email}', "
+        f"Members: {normalized}"
+    )
+
+    resp = await asyncio.to_thread(
+        service.spaces().findGroupChats(users=normalized, pageSize=30).execute
+    )
+
+    spaces = resp.get("spaces", [])
+    if not spaces:
+        return "No group-chat spaces match that exact membership."
+
+    lines = [f"Found {len(spaces)} group-chat space(s):"]
+    for s in spaces:
+        name = s.get("name", "")
+        display = s.get("displayName") or "(no display name)"
+        space_type = s.get("spaceType", "UNKNOWN")
+        created = s.get("createTime", "")
+        lines.append(f"  - {display}")
+        lines.append(f"      ID: {name}")
+        lines.append(f"      Type: {space_type}")
+        if created:
+            lines.append(f"      Created: {created}")
+
+    return "\n".join(lines)
+
+
+@server.tool()
+@require_google_service("chat", "chat_memberships_readonly")
+@handle_http_errors("list_space_members", is_read_only=True, service_type="chat")
+async def list_space_members(
+    service,
+    user_google_email: str,
+    space_id: str,
+    page_size: int = 100,
+    filter: Optional[str] = None,
+    show_invited: bool = False,
+) -> str:
+    """
+    Lists memberships in a Google Chat space.
+
+    Wraps spaces.members.list. Returns humans, bots, and (optionally)
+    invited-but-unjoined members. Caller must be a member of the space, or
+    the space must be discoverable to the caller, or 403 is returned.
+
+    Args:
+        space_id: The space resource name (e.g. spaces/AAAA...).
+        page_size: Page size, 1-1000 (Chat API default 100).
+        filter: Optional server-side filter, e.g. "member.type = 'HUMAN'" or
+                "role = 'ROLE_MEMBER'". See Chat API docs for grammar.
+        show_invited: Include memberships in INVITED state (default False).
+
+    Returns:
+        str: Formatted membership list with name, type, role, state, and
+             create time for each entry.
+    """
+    logger.info(
+        f"[list_space_members] Space: '{space_id}' for user '{user_google_email}' "
+        f"(page_size={page_size}, filter={filter!r}, show_invited={show_invited})"
+    )
+
+    kwargs = {"parent": space_id, "pageSize": page_size, "showInvited": show_invited}
+    if filter is not None:
+        kwargs["filter"] = filter
+
+    resp = await asyncio.to_thread(
+        service.spaces().members().list(**kwargs).execute
+    )
+
+    memberships = resp.get("memberships", [])
+    if not memberships:
+        return f"No memberships found in {space_id}."
+
+    lines = [f"Memberships in {space_id} ({len(memberships)} shown):"]
+    for m in memberships:
+        member = m.get("member") or {}
+        member_name = member.get("name", "")
+        member_type = member.get("type", "UNKNOWN")
+        role = m.get("role", "")
+        state = m.get("state", "")
+        created = m.get("createTime", "")
+        lines.append(f"  - {member_name} ({member_type})")
+        if role:
+            lines.append(f"      Role: {role}")
+        if state:
+            lines.append(f"      State: {state}")
+        if created:
+            lines.append(f"      Joined: {created}")
+
+    next_token = resp.get("nextPageToken")
+    if next_token:
+        lines.append(f"\n(More members available; nextPageToken={next_token})")
+
+    return "\n".join(lines)
+
+
+@server.tool()
+@require_google_service("chat", "chat_memberships")
+@handle_http_errors("join_space", is_read_only=False, service_type="chat")
+async def join_space(
+    service,
+    user_google_email: str,
+    space_id: str,
+) -> str:
+    """
+    Self-joins the authenticated caller to a Google Chat space.
+
+    Wraps spaces.members.create. Uses the email-alias form of the member
+    name, which the Chat API accepts for self-join (no People API lookup
+    required — verified empirically 2026-04-20).
+
+    Args:
+        space_id: The space resource name (e.g. spaces/AAAA...).
+
+    Returns:
+        str: Confirmation including the new membership resource name and
+             role. Surfaces 403 if the space isn't discoverable to the
+             caller, and 409 if caller is already a member.
+    """
+    body = {
+        "member": {
+            "name": f"users/{user_google_email}",
+            "type": "HUMAN",
+        },
+    }
+    logger.info(
+        f"[join_space] Caller: '{user_google_email}' joining '{space_id}'"
+    )
+
+    membership = await asyncio.to_thread(
+        service.spaces().members().create(parent=space_id, body=body).execute
+    )
+
+    name = membership.get("name", "")
+    role = membership.get("role", "")
+    state = membership.get("state", "")
+    return (
+        f"Joined {space_id}\n"
+        f"  Membership: {name}\n"
+        f"  Role: {role}\n"
+        f"  State: {state}"
+    )
+
+
+@server.tool()
+@require_google_service("chat", "chat_memberships")
+@handle_http_errors("leave_space", is_read_only=False, service_type="chat")
+async def leave_space(
+    service,
+    user_google_email: str,
+    space_id: str,
+) -> str:
+    """
+    Removes the authenticated caller from a Google Chat space.
+
+    Wraps spaces.members.delete. Uses the email-alias form for the
+    membership resource name, which the Chat API accepts for self-leave
+    (verified empirically 2026-04-20).
+
+    Args:
+        space_id: The space resource name (e.g. spaces/AAAA...).
+
+    Returns:
+        str: Confirmation that the membership was removed.
+    """
+    membership_name = f"{space_id}/members/{user_google_email}"
+    logger.info(
+        f"[leave_space] Caller: '{user_google_email}' leaving '{space_id}'"
+    )
+
+    await asyncio.to_thread(
+        service.spaces().members().delete(name=membership_name).execute
+    )
+
+    return f"Left {space_id} (removed membership {membership_name})"

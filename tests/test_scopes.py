@@ -15,6 +15,8 @@ from auth.scopes import (
     BASE_SCOPES,
     CALENDAR_READONLY_SCOPE,
     CALENDAR_SCOPE,
+    CHAT_MEMBERSHIPS_READONLY_SCOPE,
+    CHAT_SPACES_SCOPE,
     CONTACTS_READONLY_SCOPE,
     CONTACTS_SCOPE,
     DRIVE_FILE_SCOPE,
@@ -175,6 +177,12 @@ class TestHasRequiredScopes:
     def test_drive_readonly_does_not_cover_full(self):
         """Narrower scope should not satisfy broader scope."""
         assert not has_required_scopes([DRIVE_READONLY_SCOPE], [DRIVE_SCOPE])
+
+    def test_chat_spaces_does_not_cover_memberships_readonly(self):
+        """chat.spaces and chat.memberships are independent hierarchy branches."""
+        assert not has_required_scopes(
+            [CHAT_SPACES_SCOPE], [CHAT_MEMBERSHIPS_READONLY_SCOPE]
+        )
 
     # Other hierarchies
     def test_calendar_covers_readonly(self):
