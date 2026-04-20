@@ -10,9 +10,12 @@ from contextlib import ExitStack
 
 from google.auth.exceptions import RefreshError
 from google.oauth2 import service_account as google_service_account
-from googleapiclient.discovery import build
 from fastmcp.server.dependencies import get_access_token, get_context
-from auth.google_auth import get_authenticated_google_service, GoogleAuthenticationError
+from auth.google_auth import (
+    build_google_service,
+    get_authenticated_google_service,
+    GoogleAuthenticationError,
+)
 from core.config import USER_GOOGLE_EMAIL as _ENV_USER_EMAIL
 from auth.oauth21_session_store import (
     get_auth_provider,
@@ -275,7 +278,7 @@ async def _authenticate_service(
                 f"'{canonical_email}'"
             )
         credentials = _get_service_account_credentials(resolved_scopes, canonical_email)
-        service = build(service_name, service_version, credentials=credentials)
+        service = build_google_service(service_name, service_version, credentials)
         logger.info(
             f"[{tool_name}] Authenticated {service_name} for "
             f"{canonical_email} via service-account"
@@ -360,7 +363,7 @@ async def get_authenticated_google_service_oauth21(
                 f"OAuth credentials lack required scopes. Need: {required_scopes}, Have: {sorted(scopes_available)}"
             )
 
-        service = build(service_name, version, credentials=credentials)
+        service = build_google_service(service_name, version, credentials)
         logger.info(
             f"[{tool_name}] Authenticated {service_name} for "
             f"{resolved_email} via oauth2.1"
@@ -393,7 +396,7 @@ async def get_authenticated_google_service_oauth21(
             f"OAuth 2.1 credentials lack required scopes. Need: {required_scopes}, Have: {sorted(scopes_available)}"
         )
 
-    service = build(service_name, version, credentials=credentials)
+    service = build_google_service(service_name, version, credentials)
     logger.info(
         f"[{tool_name}] Authenticated {service_name} for "
         f"{user_google_email} via oauth2.1"

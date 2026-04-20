@@ -36,6 +36,23 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+def build_google_service(service_name: str, version: str, credentials):
+    """Construct a credential-authenticated Google API service client.
+
+    Uses ``static_discovery=False`` so the live discovery doc is fetched
+    instead of the stale copy bundled inside ``google-api-python-client``.
+    This ensures newer API methods (e.g. ``chat.spaces.findGroupChats``)
+    are always available. googleapiclient caches the fetched doc in-memory,
+    so the HTTP round-trip happens only once per ``(service, version)`` per
+    process.
+    """
+    return build(
+        service_name, version,
+        credentials=credentials,
+        static_discovery=False,
+    )
+
+
 # Constants
 def get_default_credentials_dir():
     """Get the default credentials directory path, preferring user-specific locations.
@@ -1205,7 +1222,7 @@ async def get_authenticated_google_service(
         raise GoogleAuthenticationError(auth_response)
 
     try:
-        service = build(service_name, version, credentials=credentials)
+        service = build_google_service(service_name, version, credentials)
         log_user_email = user_google_email
 
         # Try to get email from credentials if needed for validation
