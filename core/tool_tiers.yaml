@@ -100,6 +100,8 @@ chat:
     - create_reaction
   extended:
     - list_spaces
+    - get_space
+    - find_direct_message
     - download_chat_attachment
   complete: []
 

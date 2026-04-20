@@ -690,3 +690,126 @@ async def download_chat_attachment(
         f"[download_chat_attachment] Saved {size_kb:.1f} KB attachment to {result.path}"
     )
     return "\n".join(result_lines)
+
+
+@server.tool()
+@require_google_service("chat", "chat_spaces_readonly")
+@handle_http_errors("get_space", is_read_only=True, service_type="chat")
+async def get_space(
+    service,
+    user_google_email: str,
+    space_id: str,
+) -> str:
+    """
+    Retrieves metadata for a single Google Chat space.
+
+    Args:
+        space_id: The space resource name (e.g. spaces/AAAA...). Caller must be
+                  a member of the space; spaces.get on a non-member discoverable
+                  space returns HTTP 403.
+
+    Returns:
+        str: Formatted metadata including display name, type, history state,
+             member count, and description when available.
+    """
+    logger.info(f"[get_space] Space ID: '{space_id}' for user '{user_google_email}'")
+
+    space = await asyncio.to_thread(service.spaces().get(name=space_id).execute)
+
+    lines = [
+        f"Space: {space.get('displayName', '(no display name)')}",
+        f"  ID: {space.get('name', '')}",
+        f"  Type: {space.get('spaceType', 'UNKNOWN')}",
+    ]
+
+    space_history_state = space.get("spaceHistoryState")
+    if space_history_state:
+        lines.append(f"  History: {space_history_state}")
+
+    create_time = space.get("createTime")
+    if create_time:
+        lines.append(f"  Created: {create_time}")
+
+    member_count = space.get("membershipCount") or {}
+    joined_humans = member_count.get("joinedDirectHumanUserCount")
+    joined_groups = member_count.get("joinedGroupCount")
+    if joined_humans is not None or joined_groups is not None:
+        parts = []
+        if joined_humans is not None:
+            parts.append(f"{joined_humans} humans")
+        if joined_groups is not None:
+            parts.append(f"{joined_groups} groups")
+        lines.append(f"  Members: {', '.join(parts)}")
+
+    if space.get("externalUserAllowed") is not None:
+        lines.append(f"  External users allowed: {space['externalUserAllowed']}")
+
+    space_details = space.get("spaceDetails") or {}
+    description = space_details.get("description")
+    if description:
+        lines.append(f"  Description: {description}")
+    guidelines = space_details.get("guidelines")
+    if guidelines:
+        lines.append(f"  Guidelines: {guidelines}")
+
+    import_mode = space.get("importMode")
+    if import_mode:
+        lines.append(f"  Import mode: {import_mode}")
+
+    space_uri = space.get("spaceUri")
+    if space_uri:
+        lines.append(f"  URL: {space_uri}")
+
+    return "\n".join(lines)
+
+
+@server.tool()
+@require_google_service("chat", "chat_spaces_readonly")
+@handle_http_errors("find_direct_message", is_read_only=True, service_type="chat")
+async def find_direct_message(
+    service,
+    user_google_email: str,
+    target_user: str,
+) -> str:
+    """
+    Resolves the direct-message space ID for a given user.
+
+    Wraps spaces.findDirectMessage. Empirically the Chat API accepts the
+    email form (users/<email>) only for the authenticated caller; to look up
+    a DM with another user, supply their numeric user ID (users/<id>).
+
+    Args:
+        target_user: The other participant. Accepts any of:
+                     - full resource name: "users/123456789"
+                     - bare numeric ID:    "123456789"
+                     - email (caller-self only): "me@example.com"
+
+    Returns:
+        str: The DM space resource name and basic metadata, or a 404
+             message if no DM exists yet.
+    """
+    name = target_user if target_user.startswith("users/") else f"users/{target_user}"
+    logger.info(
+        f"[find_direct_message] Caller: '{user_google_email}', Target: '{name}'"
+    )
+
+    space = await asyncio.to_thread(
+        service.spaces().findDirectMessage(name=name).execute
+    )
+
+    space_name = space.get("name", "")
+    space_type = space.get("spaceType", "UNKNOWN")
+    display_name = space.get("displayName", "")
+    create_time = space.get("createTime", "")
+
+    lines = [
+        f"Direct message space for {name}:",
+        f"  ID: {space_name}",
+        f"  Type: {space_type}",
+    ]
+    if display_name:
+        lines.append(f"  Display name: {display_name}")
+    if create_time:
+        lines.append(f"  Created: {create_time}")
+
+    return "\n".join(lines)
