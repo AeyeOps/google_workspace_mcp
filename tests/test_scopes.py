@@ -17,8 +17,10 @@ from auth.scopes import (
     CALENDAR_SCOPE,
     CHAT_MEMBERSHIPS_READONLY_SCOPE,
     CHAT_SPACES_SCOPE,
+    CONTACTS_OTHER_READONLY_SCOPE,
     CONTACTS_READONLY_SCOPE,
     CONTACTS_SCOPE,
+    DIRECTORY_READONLY_SCOPE,
     DRIVE_FILE_SCOPE,
     DRIVE_READONLY_SCOPE,
     DRIVE_SCOPE,
@@ -111,6 +113,22 @@ class TestReadOnlyScopes:
         set_read_only(True)
         scopes = get_scopes_for_tools(["sheets"])
         assert DRIVE_READONLY_SCOPE in scopes
+
+    def test_contacts_full_includes_directory_and_other_contacts(self):
+        """Contacts service should request personal, other, and directory scopes."""
+        scopes = get_scopes_for_tools(["contacts"])
+        assert CONTACTS_SCOPE in scopes
+        assert CONTACTS_READONLY_SCOPE in scopes
+        assert CONTACTS_OTHER_READONLY_SCOPE in scopes
+        assert DIRECTORY_READONLY_SCOPE in scopes
+
+    def test_contacts_readonly_includes_directory_and_other_contacts(self):
+        """Read-only contacts mode should include readonly related contacts scopes."""
+        set_read_only(True)
+        scopes = get_scopes_for_tools(["contacts"])
+        assert CONTACTS_READONLY_SCOPE in scopes
+        assert CONTACTS_OTHER_READONLY_SCOPE in scopes
+        assert DIRECTORY_READONLY_SCOPE in scopes
 
 
 class TestHasRequiredScopes:

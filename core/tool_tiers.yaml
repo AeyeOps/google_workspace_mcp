@@ -150,8 +150,11 @@ contacts:
     - list_contacts
     - manage_contact
   extended:
+    - search_directory_people
     - list_contact_groups
     - get_contact_group
+    - list_other_contacts
+    - search_other_contacts
   complete:
     - manage_contacts_batch
     - manage_contact_group

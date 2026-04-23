@@ -22,6 +22,15 @@ logger = logging.getLogger(__name__)
 
 # Default person fields for list/search operations
 DEFAULT_PERSON_FIELDS = "names,emailAddresses,phoneNumbers,organizations"
+DEFAULT_DIRECTORY_SOURCES = [
+    "DIRECTORY_SOURCE_TYPE_DOMAIN_PROFILE",
+    "DIRECTORY_SOURCE_TYPE_DOMAIN_CONTACT",
+]
+DirectorySource = Literal[
+    "DIRECTORY_SOURCE_TYPE_DOMAIN_PROFILE",
+    "DIRECTORY_SOURCE_TYPE_DOMAIN_CONTACT",
+]
+DIRECTORY_SOURCE_TYPES = frozenset(DEFAULT_DIRECTORY_SOURCES)
 
 # Detailed person fields for get operations
 DETAILED_PERSON_FIELDS = (
@@ -656,6 +665,26 @@ async def _warmup_search_cache(service: Resource, user_google_email: str) -> Non
         logger.warning(f"[contacts] Search cache warmup failed: {e}")
 
 
+def _normalize_directory_sources(sources: Optional[List[DirectorySource]]) -> List[str]:
+    """Normalize and validate directory source types."""
+    if not sources:
+        return list(DEFAULT_DIRECTORY_SOURCES)
+
+    normalized = [source.strip() for source in sources if source and source.strip()]
+    if not normalized:
+        raise UserInputError("sources must contain at least one non-empty directory source type")
+
+    invalid_sources = [source for source in normalized if source not in DIRECTORY_SOURCE_TYPES]
+    if invalid_sources:
+        raise UserInputError(
+            "Invalid directory source type(s): "
+            f"{', '.join(invalid_sources)}. Valid values: "
+            f"{', '.join(sorted(DIRECTORY_SOURCE_TYPES))}."
+        )
+
+    return normalized
+
+
 # =============================================================================
 # Core Tier Tools
 # =============================================================================
@@ -820,6 +849,218 @@ async def search_contacts(
 
     logger.info(
         f"Found {len(results)} contacts matching '{query}' for {user_google_email}"
+    )
+    return response
+
+
+@server.tool()
+@require_google_service("people", "directory_read")
+@handle_http_errors("search_directory_people", service_type="people")
+async def search_directory_people(
+    service: Resource,
+    user_google_email: str,
+    query: str,
+    page_size: int = 30,
+    sources: Optional[List[DirectorySource]] = None,
+    merge_contact_data: bool = False,
+    page_token: Optional[str] = None,
+) -> str:
+    """
+    Search the authenticated user's Google Workspace directory.
+
+    Searches the Workspace directory surface, not personal Google Contacts.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        query (str): Prefix search query string.
+        page_size (int): Maximum number of results to return (default: 30, max: 500).
+        sources (Optional[List[DirectorySource]]): Directory sources to search. Valid values:
+            "DIRECTORY_SOURCE_TYPE_DOMAIN_PROFILE" and
+            "DIRECTORY_SOURCE_TYPE_DOMAIN_CONTACT". Defaults to both.
+        merge_contact_data (bool): If True, request merged contact data using
+            "DIRECTORY_MERGE_SOURCE_TYPE_CONTACT".
+        page_token (Optional[str]): Token for pagination. Pass the "Next page token"
+            value from a previous response to fetch the subsequent page.
+
+    Returns:
+        str: A readable summary containing page result count, matching directory people,
+            and an optional next page token.
+    """
+    logger.info(
+        f"[search_directory_people] Invoked. Email: '{user_google_email}', Query: '{query}'"
+    )
+
+    query = (query or "").strip()
+    if not query:
+        raise UserInputError("query is required")
+    if page_size < 1:
+        raise UserInputError("page_size must be >= 1")
+    page_size = min(page_size, 500)
+
+    request_kwargs: Dict[str, Any] = {
+        "query": query,
+        "readMask": DEFAULT_PERSON_FIELDS,
+        "pageSize": page_size,
+        "sources": _normalize_directory_sources(sources),
+    }
+    if merge_contact_data:
+        request_kwargs["mergeSources"] = ["DIRECTORY_MERGE_SOURCE_TYPE_CONTACT"]
+    if page_token:
+        request_kwargs["pageToken"] = page_token
+
+    result = await asyncio.to_thread(
+        service.people().searchDirectoryPeople(**request_kwargs).execute
+    )
+
+    people = result.get("people", [])
+    next_page_token = result.get("nextPageToken")
+
+    if not people:
+        return f"No directory people found matching '{query}' for {user_google_email}."
+
+    response = (
+        f"Directory Search Results for '{query}'\n"
+        f"Results in page: {len(people)}\n\n"
+    )
+
+    for person in people:
+        response += _format_contact(person, detailed=True) + "\n\n"
+
+    if next_page_token:
+        response += f"Next page token: {next_page_token}"
+
+    logger.info(
+        f"Found {len(people)} directory people matching '{query}' for {user_google_email}"
+    )
+    return response
+
+
+@server.tool()
+@require_google_service("people", "contacts_other_read")
+@handle_http_errors("list_other_contacts", service_type="people")
+async def list_other_contacts(
+    service: Resource,
+    user_google_email: str,
+    page_size: int = 100,
+    page_token: Optional[str] = None,
+) -> str:
+    """
+    List Other Contacts for the authenticated user.
+
+    Lists the People API "Other Contacts" surface, which is distinct from grouped
+    contacts and the Workspace directory.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        page_size (int): Maximum number of contacts to return (default: 100, max: 1000).
+        page_token (Optional[str]): Token for pagination. Pass the "Next page token"
+            value from a previous response to fetch the subsequent page.
+
+    Returns:
+        str: A readable summary containing page result count, matching Other Contacts,
+            and (when the People API includes it) total available contacts plus an
+            optional next page token.
+    """
+    logger.info(f"[list_other_contacts] Invoked. Email: '{user_google_email}'")
+
+    if page_size < 1:
+        raise UserInputError("page_size must be >= 1")
+    page_size = min(page_size, 1000)
+
+    request_kwargs: Dict[str, Any] = {
+        "readMask": DEFAULT_PERSON_FIELDS,
+        "pageSize": page_size,
+    }
+    if page_token:
+        request_kwargs["pageToken"] = page_token
+
+    result = await asyncio.to_thread(service.otherContacts().list(**request_kwargs).execute)
+
+    other_contacts = result.get("otherContacts", [])
+    next_page_token = result.get("nextPageToken")
+    total_size = result.get("totalSize")
+
+    if not other_contacts:
+        return f"No other contacts found for {user_google_email}."
+
+    response = (
+        f"Other Contacts for {user_google_email}\n"
+        f"Results in page: {len(other_contacts)}\n"
+    )
+    if total_size is not None:
+        response += f"Total available: {total_size}\n"
+    response += "\n"
+
+    for person in other_contacts:
+        response += _format_contact(person) + "\n\n"
+
+    if next_page_token:
+        response += f"Next page token: {next_page_token}"
+
+    logger.info(f"Found {len(other_contacts)} other contacts for {user_google_email}")
+    return response
+
+
+@server.tool()
+@require_google_service("people", "contacts_other_read")
+@handle_http_errors("search_other_contacts", service_type="people")
+async def search_other_contacts(
+    service: Resource,
+    user_google_email: str,
+    query: str,
+    page_size: int = 30,
+) -> str:
+    """
+    Search Other Contacts by name, email, phone number, or other fields.
+
+    Searches the People API "Other Contacts" surface, not grouped contacts or the
+    Workspace directory.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        query (str): Search query string.
+        page_size (int): Maximum number of results to return (default: 30, max: 30).
+
+    Returns:
+        str: A readable summary containing page result count and matching Other Contacts.
+    """
+    logger.info(
+        f"[search_other_contacts] Invoked. Email: '{user_google_email}', Query: '{query}'"
+    )
+
+    query = (query or "").strip()
+    if not query:
+        raise UserInputError("query is required")
+    if page_size < 1:
+        raise UserInputError("page_size must be >= 1")
+    page_size = min(page_size, 30)
+
+    result = await asyncio.to_thread(
+        service.otherContacts()
+        .search(
+            query=query,
+            readMask=DEFAULT_PERSON_FIELDS,
+            pageSize=page_size,
+        )
+        .execute
+    )
+
+    results = result.get("results", [])
+
+    if not results:
+        return f"No other contacts found matching '{query}' for {user_google_email}."
+
+    response = (
+        f"Other Contact Search Results for '{query}'\n"
+        f"Results in page: {len(results)}\n\n"
+    )
+
+    for item in results:
+        person = item.get("person", {})
+        response += _format_contact(person) + "\n\n"
+
+    logger.info(
+        f"Found {len(results)} other contacts matching '{query}' for {user_google_email}"
     )
     return response
 

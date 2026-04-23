@@ -24,6 +24,10 @@ from auth.scopes import (
     GMAIL_LABELS_SCOPE,
     GMAIL_MODIFY_SCOPE,
     GMAIL_COMPOSE_SCOPE,
+    CONTACTS_OTHER_READONLY_SCOPE,
+    CONTACTS_READONLY_SCOPE,
+    CONTACTS_SCOPE,
+    DIRECTORY_READONLY_SCOPE,
     DRIVE_READONLY_SCOPE,
     DRIVE_SCOPE,
     TASKS_READONLY_SCOPE,
@@ -137,6 +141,22 @@ class TestGetScopesForPermission:
         scopes = get_scopes_for_permission("tasks", "full")
         assert TASKS_SCOPE in scopes
         assert TASKS_READONLY_SCOPE in scopes
+
+    def test_contacts_readonly_includes_directory_and_other_contacts(self):
+        """Contacts readonly level should include all read-only contact surfaces."""
+        scopes = get_scopes_for_permission("contacts", "readonly")
+        assert CONTACTS_READONLY_SCOPE in scopes
+        assert CONTACTS_OTHER_READONLY_SCOPE in scopes
+        assert DIRECTORY_READONLY_SCOPE in scopes
+        assert CONTACTS_SCOPE not in scopes
+
+    def test_contacts_full_includes_personal_and_readonly_contact_surfaces(self):
+        """Contacts full level should cumulatively include readonly and write scopes."""
+        scopes = get_scopes_for_permission("contacts", "full")
+        assert CONTACTS_SCOPE in scopes
+        assert CONTACTS_READONLY_SCOPE in scopes
+        assert CONTACTS_OTHER_READONLY_SCOPE in scopes
+        assert DIRECTORY_READONLY_SCOPE in scopes
 
 
 @pytest.fixture(autouse=True)

@@ -1,11 +1,14 @@
 """
 Unit tests for Google Contacts (People API) tools.
 
-Tests helper functions and formatting utilities.
+Tests helper functions, formatting utilities, and read-only search surfaces.
 """
 
 import sys
 import os
+from unittest.mock import MagicMock
+
+import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
@@ -13,6 +16,14 @@ from gcontacts.contacts_tools import (
     _format_contact,
     _build_person_body,
 )
+
+
+def _unwrap(tool):
+    """Unwrap a FunctionTool + decorator chain to the original async function."""
+    fn = tool.fn if hasattr(tool, "fn") else tool
+    while hasattr(fn, "__wrapped__"):
+        fn = fn.__wrapped__
+    return fn
 
 
 class TestFormatContact:
@@ -301,6 +312,14 @@ class TestImports:
         assert hasattr(contacts_tools, "get_contact_group")
         assert hasattr(contacts_tools, "manage_contact_group")
 
+    def test_import_directory_tools(self):
+        """Test that directory and other-contacts tools can be imported."""
+        from gcontacts import contacts_tools
+
+        assert hasattr(contacts_tools, "search_directory_people")
+        assert hasattr(contacts_tools, "list_other_contacts")
+        assert hasattr(contacts_tools, "search_other_contacts")
+
     def test_import_batch_tools(self):
         """Test that batch tools can be imported."""
         from gcontacts import contacts_tools
@@ -337,3 +356,222 @@ class TestConstants:
         assert "name" in CONTACT_GROUP_FIELDS
         assert "groupType" in CONTACT_GROUP_FIELDS
         assert "memberCount" in CONTACT_GROUP_FIELDS
+
+
+class TestReadOnlySearchTools:
+    """Tests for read-only contact and directory search tools."""
+
+    @pytest.mark.asyncio
+    async def test_search_directory_people_formats_results(self):
+        """Directory search should format People API directory results."""
+        from gcontacts.contacts_tools import search_directory_people
+
+        service = MagicMock()
+        service.people.return_value.searchDirectoryPeople.return_value.execute.return_value = {
+            "people": [
+                {
+                    "resourceName": "people/123",
+                    "names": [{"displayName": "Lindsay Warner"}],
+                    "emailAddresses": [{"value": "lindsay.warner@moodmedia.com"}],
+                    "organizations": [{"name": "Mood Media", "title": "Director"}],
+                    "metadata": {
+                        "sources": [{"type": "DIRECTORY_SOURCE_TYPE_DOMAIN_PROFILE"}]
+                    },
+                }
+            ]
+        }
+
+        result = await _unwrap(search_directory_people)(
+            service=service,
+            user_google_email="steve.antonakakis@moodmedia.com",
+            query="lindsay",
+        )
+
+        assert "Directory Search Results for 'lindsay'" in result
+        assert "Results in page: 1" in result
+        assert "Name: Lindsay Warner" in result
+        assert "lindsay.warner@moodmedia.com" in result
+        assert "Organization: Director at Mood Media" in result
+
+    @pytest.mark.asyncio
+    async def test_list_other_contacts_formats_results(self):
+        """Other contacts listing should format returned contacts."""
+        from gcontacts.contacts_tools import list_other_contacts
+
+        service = MagicMock()
+        service.otherContacts.return_value.list.return_value.execute.return_value = {
+            "otherContacts": [
+                {
+                    "resourceName": "people/other123",
+                    "names": [{"displayName": "Anthony Example"}],
+                    "emailAddresses": [{"value": "anthony@example.com"}],
+                }
+            ]
+        }
+
+        result = await _unwrap(list_other_contacts)(
+            service=service,
+            user_google_email="steve.antonakakis@moodmedia.com",
+            page_size=10,
+        )
+
+        assert "Other Contacts for steve.antonakakis@moodmedia.com" in result
+        assert "Results in page: 1" in result
+        assert "Total available:" not in result
+        assert "Name: Anthony Example" in result
+        assert "anthony@example.com" in result
+
+    @pytest.mark.asyncio
+    async def test_search_other_contacts_formats_results(self):
+        """Other contacts search should format returned matches."""
+        from gcontacts.contacts_tools import search_other_contacts
+
+        service = MagicMock()
+        service.otherContacts.return_value.search.return_value.execute.return_value = {
+            "results": [
+                {
+                    "person": {
+                        "resourceName": "people/other999",
+                        "names": [{"displayName": "Warner Search Hit"}],
+                        "emailAddresses": [{"value": "warner@example.com"}],
+                    }
+                }
+            ]
+        }
+
+        result = await _unwrap(search_other_contacts)(
+            service=service,
+            user_google_email="steve.antonakakis@moodmedia.com",
+            query="warner",
+        )
+
+        assert "Other Contact Search Results for 'warner'" in result
+        assert "Results in page: 1" in result
+        assert "Name: Warner Search Hit" in result
+        assert "warner@example.com" in result
+
+    @pytest.mark.asyncio
+    async def test_search_directory_people_rejects_blank_sources(self):
+        """Blank directory source strings should fail validation."""
+        from gcontacts.contacts_tools import search_directory_people
+        from core.utils import UserInputError
+
+        service = MagicMock()
+
+        with pytest.raises(
+            UserInputError,
+            match="sources must contain at least one non-empty directory source type",
+        ):
+            await _unwrap(search_directory_people)(
+                service=service,
+                user_google_email="steve.antonakakis@moodmedia.com",
+                query="lindsay",
+                sources=["   "],
+            )
+
+    @pytest.mark.asyncio
+    async def test_search_directory_people_rejects_invalid_sources(self):
+        """Unknown directory source literals should fail validation."""
+        from gcontacts.contacts_tools import search_directory_people
+        from core.utils import UserInputError
+
+        service = MagicMock()
+
+        with pytest.raises(UserInputError, match=r"Invalid directory source type\(s\): INVALID"):
+            await _unwrap(search_directory_people)(
+                service=service,
+                user_google_email="steve.antonakakis@moodmedia.com",
+                query="lindsay",
+                sources=["INVALID"],
+            )
+
+    @pytest.mark.asyncio
+    async def test_search_directory_people_empty_results_message(self):
+        """Directory search should return a clear no-results message."""
+        from gcontacts.contacts_tools import search_directory_people
+
+        service = MagicMock()
+        service.people.return_value.searchDirectoryPeople.return_value.execute.return_value = {}
+
+        result = await _unwrap(search_directory_people)(
+            service=service,
+            user_google_email="steve.antonakakis@moodmedia.com",
+            query="lindsay",
+        )
+
+        assert result == "No directory people found matching 'lindsay' for steve.antonakakis@moodmedia.com."
+
+    @pytest.mark.asyncio
+    async def test_search_directory_people_renders_pagination_and_merge_sources(self):
+        """Directory search should render next-page token and wire mergeSources."""
+        from gcontacts.contacts_tools import search_directory_people
+
+        service = MagicMock()
+        service.people.return_value.searchDirectoryPeople.return_value.execute.return_value = {
+            "people": [{"resourceName": "people/123", "names": [{"displayName": "Lindsay Warner"}]}],
+            "nextPageToken": "dir-next-token",
+        }
+
+        result = await _unwrap(search_directory_people)(
+            service=service,
+            user_google_email="steve.antonakakis@moodmedia.com",
+            query="lindsay",
+            merge_contact_data=True,
+        )
+
+        service.people.return_value.searchDirectoryPeople.assert_called_once()
+        call_kwargs = service.people.return_value.searchDirectoryPeople.call_args.kwargs
+        assert call_kwargs["mergeSources"] == ["DIRECTORY_MERGE_SOURCE_TYPE_CONTACT"]
+        assert "Next page token: dir-next-token" in result
+
+    @pytest.mark.asyncio
+    async def test_list_other_contacts_empty_results_message(self):
+        """Other contacts list should return a clear no-results message."""
+        from gcontacts.contacts_tools import list_other_contacts
+
+        service = MagicMock()
+        service.otherContacts.return_value.list.return_value.execute.return_value = {}
+
+        result = await _unwrap(list_other_contacts)(
+            service=service,
+            user_google_email="steve.antonakakis@moodmedia.com",
+        )
+
+        assert result == "No other contacts found for steve.antonakakis@moodmedia.com."
+
+    @pytest.mark.asyncio
+    async def test_list_other_contacts_renders_pagination(self):
+        """Other contacts list should render total and next-page token."""
+        from gcontacts.contacts_tools import list_other_contacts
+
+        service = MagicMock()
+        service.otherContacts.return_value.list.return_value.execute.return_value = {
+            "otherContacts": [{"resourceName": "people/other123", "names": [{"displayName": "Anthony Example"}]}],
+            "totalSize": 23,
+            "nextPageToken": "other-next-token",
+        }
+
+        result = await _unwrap(list_other_contacts)(
+            service=service,
+            user_google_email="steve.antonakakis@moodmedia.com",
+        )
+
+        assert "Results in page: 1" in result
+        assert "Total available: 23" in result
+        assert "Next page token: other-next-token" in result
+
+    @pytest.mark.asyncio
+    async def test_search_other_contacts_empty_results_message(self):
+        """Other contacts search should return a clear no-results message."""
+        from gcontacts.contacts_tools import search_other_contacts
+
+        service = MagicMock()
+        service.otherContacts.return_value.search.return_value.execute.return_value = {}
+
+        result = await _unwrap(search_other_contacts)(
+            service=service,
+            user_google_email="steve.antonakakis@moodmedia.com",
+            query="warner",
+        )
+
+        assert result == "No other contacts found matching 'warner' for steve.antonakakis@moodmedia.com."
