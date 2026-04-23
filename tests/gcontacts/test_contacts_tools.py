@@ -417,7 +417,7 @@ class TestReadOnlySearchTools:
 
         assert "Other Contacts for steve.antonakakis@moodmedia.com" in result
         assert "Results in page: 1" in result
-        assert "Total available: 1" in result
+        assert "Total available:" not in result
         assert "Name: Anthony Example" in result
         assert "anthony@example.com" in result
 

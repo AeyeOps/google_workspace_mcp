@@ -30,7 +30,7 @@ DirectorySource = Literal[
     "DIRECTORY_SOURCE_TYPE_DOMAIN_PROFILE",
     "DIRECTORY_SOURCE_TYPE_DOMAIN_CONTACT",
 ]
-DIRECTORY_SOURCE_TYPES = set(DEFAULT_DIRECTORY_SOURCES)
+DIRECTORY_SOURCE_TYPES = frozenset(DEFAULT_DIRECTORY_SOURCES)
 
 # Detailed person fields for get operations
 DETAILED_PERSON_FIELDS = (
@@ -863,6 +863,7 @@ async def search_directory_people(
     page_size: int = 30,
     sources: Optional[List[DirectorySource]] = None,
     merge_contact_data: bool = False,
+    page_token: Optional[str] = None,
 ) -> str:
     """
     Search the authenticated user's Google Workspace directory.
@@ -878,6 +879,8 @@ async def search_directory_people(
             "DIRECTORY_SOURCE_TYPE_DOMAIN_CONTACT". Defaults to both.
         merge_contact_data (bool): If True, request merged contact data using
             "DIRECTORY_MERGE_SOURCE_TYPE_CONTACT".
+        page_token (Optional[str]): Token for pagination. Pass the "Next page token"
+            value from a previous response to fetch the subsequent page.
 
     Returns:
         str: A readable summary containing page result count, matching directory people,
@@ -902,6 +905,8 @@ async def search_directory_people(
     }
     if merge_contact_data:
         request_kwargs["mergeSources"] = ["DIRECTORY_MERGE_SOURCE_TYPE_CONTACT"]
+    if page_token:
+        request_kwargs["pageToken"] = page_token
 
     result = await asyncio.to_thread(
         service.people().searchDirectoryPeople(**request_kwargs).execute
@@ -948,11 +953,13 @@ async def list_other_contacts(
     Args:
         user_google_email (str): The user's Google email address. Required.
         page_size (int): Maximum number of contacts to return (default: 100, max: 1000).
-        page_token (Optional[str]): Token for pagination.
+        page_token (Optional[str]): Token for pagination. Pass the "Next page token"
+            value from a previous response to fetch the subsequent page.
 
     Returns:
-        str: A readable summary containing page result count, total available contacts,
-            matching Other Contacts, and an optional next page token.
+        str: A readable summary containing page result count, matching Other Contacts,
+            and (when the People API includes it) total available contacts plus an
+            optional next page token.
     """
     logger.info(f"[list_other_contacts] Invoked. Email: '{user_google_email}'")
 
@@ -971,7 +978,7 @@ async def list_other_contacts(
 
     other_contacts = result.get("otherContacts", [])
     next_page_token = result.get("nextPageToken")
-    total_size = result.get("totalSize", len(other_contacts))
+    total_size = result.get("totalSize")
 
     if not other_contacts:
         return f"No other contacts found for {user_google_email}."
@@ -979,8 +986,10 @@ async def list_other_contacts(
     response = (
         f"Other Contacts for {user_google_email}\n"
         f"Results in page: {len(other_contacts)}\n"
-        f"Total available: {total_size}\n\n"
     )
+    if total_size is not None:
+        response += f"Total available: {total_size}\n"
+    response += "\n"
 
     for person in other_contacts:
         response += _format_contact(person) + "\n\n"
