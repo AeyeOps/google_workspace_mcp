@@ -137,9 +137,7 @@ def _extract_rich_links(msg: dict) -> List[str]:
 def _human_membership_body(member_email: str) -> dict:
     """Build a Chat human membership body from an email or users/* alias."""
     member_name = (
-        member_email
-        if member_email.startswith("users/")
-        else f"users/{member_email}"
+        member_email if member_email.startswith("users/") else f"users/{member_email}"
     )
     return {
         "member": {
@@ -832,7 +830,10 @@ async def create_space(
         normalized = member_email.strip()
         if not normalized:
             raise UserInputError("member_emails cannot contain blank values.")
-        if normalized.lower() in {user_google_email.lower(), f"users/{user_google_email.lower()}"}:
+        if normalized.lower() in {
+            user_google_email.lower(),
+            f"users/{user_google_email.lower()}",
+        }:
             raise UserInputError(
                 "member_emails must omit the caller; Chat adds the caller automatically."
             )
@@ -853,7 +854,9 @@ async def create_space(
             "DIRECT_MESSAGE requires exactly one member_email because the caller "
             "is added automatically."
         )
-    if space_type_value != "SPACE" and (description is not None or guidelines is not None):
+    if space_type_value != "SPACE" and (
+        description is not None or guidelines is not None
+    ):
         raise UserInputError("description and guidelines are only supported for SPACE.")
 
     space_body = {"spaceType": space_type_value}
@@ -952,7 +955,10 @@ async def update_space(
         raise UserInputError("display_name cannot be blank.")
 
     valid_history_states = {"HISTORY_ON", "HISTORY_OFF"}
-    if space_history_state is not None and space_history_state not in valid_history_states:
+    if (
+        space_history_state is not None
+        and space_history_state not in valid_history_states
+    ):
         raise UserInputError(
             "space_history_state must be 'HISTORY_ON' or 'HISTORY_OFF'."
         )
@@ -994,24 +1000,28 @@ async def update_space(
     last_response = None
     if update_mask_fields:
         last_response = await asyncio.to_thread(
-            lambda: service.spaces()
-            .patch(
-                name=space_id,
-                updateMask=",".join(update_mask_fields),
-                body=body,
+            lambda: (
+                service.spaces()
+                .patch(
+                    name=space_id,
+                    updateMask=",".join(update_mask_fields),
+                    body=body,
+                )
+                .execute()
             )
-            .execute()
         )
 
     if space_history_state is not None:
         last_response = await asyncio.to_thread(
-            lambda: service.spaces()
-            .patch(
-                name=space_id,
-                updateMask="spaceHistoryState",
-                body={"name": space_id, "spaceHistoryState": space_history_state},
+            lambda: (
+                service.spaces()
+                .patch(
+                    name=space_id,
+                    updateMask="spaceHistoryState",
+                    body={"name": space_id, "spaceHistoryState": space_history_state},
+                )
+                .execute()
             )
-            .execute()
         )
         updated_fields.append("spaceHistoryState")
 
@@ -1144,8 +1154,7 @@ async def find_group_chats(
 
     normalized = [u if u.startswith("users/") else f"users/{u}" for u in users]
     logger.info(
-        f"[find_group_chats] Caller: '{user_google_email}', "
-        f"Members: {normalized}"
+        f"[find_group_chats] Caller: '{user_google_email}', Members: {normalized}"
     )
 
     resp = await asyncio.to_thread(
@@ -1209,9 +1218,7 @@ async def list_space_members(
     if filter is not None:
         kwargs["filter"] = filter
 
-    resp = await asyncio.to_thread(
-        service.spaces().members().list(**kwargs).execute
-    )
+    resp = await asyncio.to_thread(service.spaces().members().list(**kwargs).execute)
 
     memberships = resp.get("memberships", [])
     if not memberships:
@@ -1297,13 +1304,15 @@ async def manage_space_member(
         if not member_email or not member_email.strip():
             raise UserInputError("member_email is required for the 'add' action.")
         membership = await asyncio.to_thread(
-            lambda: service.spaces()
-            .members()
-            .create(
-                parent=space_id,
-                body=_human_membership_body(member_email.strip()),
+            lambda: (
+                service.spaces()
+                .members()
+                .create(
+                    parent=space_id,
+                    body=_human_membership_body(member_email.strip()),
+                )
+                .execute()
             )
-            .execute()
         )
         member = membership.get("member") or {}
         lines = [
@@ -1318,16 +1327,16 @@ async def manage_space_member(
         return "\n".join(lines)
 
     if not membership_name or not membership_name.strip():
-        raise UserInputError(
-            f"membership_name is required for the '{action}' action."
-        )
+        raise UserInputError(f"membership_name is required for the '{action}' action.")
 
     if action == "remove":
         await asyncio.to_thread(
-            lambda: service.spaces()
-            .members()
-            .delete(name=membership_name.strip())
-            .execute()
+            lambda: (
+                service.spaces()
+                .members()
+                .delete(name=membership_name.strip())
+                .execute()
+            )
         )
         return f"Removed membership {membership_name.strip()} from {space_id}."
 
@@ -1339,14 +1348,16 @@ async def manage_space_member(
         )
 
     membership = await asyncio.to_thread(
-        lambda: service.spaces()
-        .members()
-        .patch(
-            name=membership_name.strip(),
-            updateMask="role",
-            body={"name": membership_name.strip(), "role": role},
+        lambda: (
+            service.spaces()
+            .members()
+            .patch(
+                name=membership_name.strip(),
+                updateMask="role",
+                body={"name": membership_name.strip(), "role": role},
+            )
+            .execute()
         )
-        .execute()
     )
     member = membership.get("member") or {}
     lines = [
@@ -1389,9 +1400,7 @@ async def join_space(
             "type": "HUMAN",
         },
     }
-    logger.info(
-        f"[join_space] Caller: '{user_google_email}' joining '{space_id}'"
-    )
+    logger.info(f"[join_space] Caller: '{user_google_email}' joining '{space_id}'")
 
     membership = await asyncio.to_thread(
         service.spaces().members().create(parent=space_id, body=body).execute
@@ -1400,12 +1409,7 @@ async def join_space(
     name = membership.get("name", "")
     role = membership.get("role", "")
     state = membership.get("state", "")
-    return (
-        f"Joined {space_id}\n"
-        f"  Membership: {name}\n"
-        f"  Role: {role}\n"
-        f"  State: {state}"
-    )
+    return f"Joined {space_id}\n  Membership: {name}\n  Role: {role}\n  State: {state}"
 
 
 @server.tool()
@@ -1430,9 +1434,7 @@ async def leave_space(
         str: Confirmation that the membership was removed.
     """
     membership_name = f"{space_id}/members/{user_google_email}"
-    logger.info(
-        f"[leave_space] Caller: '{user_google_email}' leaving '{space_id}'"
-    )
+    logger.info(f"[leave_space] Caller: '{user_google_email}' leaving '{space_id}'")
 
     await asyncio.to_thread(
         service.spaces().members().delete(name=membership_name).execute

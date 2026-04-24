@@ -91,7 +91,14 @@ SERVICE_PERMISSION_LEVELS: Dict[str, List[Tuple[str, List[str]]]] = {
         ("full", [SHEETS_WRITE_SCOPE, DRIVE_READONLY_SCOPE]),
     ],
     "chat": [
-        ("readonly", [CHAT_READONLY_SCOPE, CHAT_SPACES_READONLY_SCOPE, CHAT_MEMBERSHIPS_READONLY_SCOPE]),
+        (
+            "readonly",
+            [
+                CHAT_READONLY_SCOPE,
+                CHAT_SPACES_READONLY_SCOPE,
+                CHAT_MEMBERSHIPS_READONLY_SCOPE,
+            ],
+        ),
         ("manage", [CHAT_WRITE_SCOPE, CHAT_SPACES_SCOPE, CHAT_MEMBERSHIPS_SCOPE]),
         ("full", [CHAT_DELETE_SCOPE]),
     ],
@@ -109,11 +116,14 @@ SERVICE_PERMISSION_LEVELS: Dict[str, List[Tuple[str, List[str]]]] = {
         ("full", []),
     ],
     "contacts": [
-        ("readonly", [
-            CONTACTS_READONLY_SCOPE,
-            CONTACTS_OTHER_READONLY_SCOPE,
-            DIRECTORY_READONLY_SCOPE,
-        ]),
+        (
+            "readonly",
+            [
+                CONTACTS_READONLY_SCOPE,
+                CONTACTS_OTHER_READONLY_SCOPE,
+                DIRECTORY_READONLY_SCOPE,
+            ],
+        ),
         ("full", [CONTACTS_SCOPE]),
     ],
     "search": [
