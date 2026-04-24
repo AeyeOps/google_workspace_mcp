@@ -24,6 +24,13 @@ from auth.scopes import (
     GMAIL_LABELS_SCOPE,
     GMAIL_MODIFY_SCOPE,
     GMAIL_COMPOSE_SCOPE,
+    CHAT_DELETE_SCOPE,
+    CHAT_MEMBERSHIPS_READONLY_SCOPE,
+    CHAT_MEMBERSHIPS_SCOPE,
+    CHAT_READONLY_SCOPE,
+    CHAT_SPACES_READONLY_SCOPE,
+    CHAT_SPACES_SCOPE,
+    CHAT_WRITE_SCOPE,
     CONTACTS_OTHER_READONLY_SCOPE,
     CONTACTS_READONLY_SCOPE,
     CONTACTS_SCOPE,
@@ -80,6 +87,11 @@ class TestParsePermissionsArg:
         """tasks:manage should be accepted by parse_permissions_arg."""
         result = parse_permissions_arg(["tasks:manage"])
         assert result == {"tasks": "manage"}
+
+    def test_chat_manage_is_valid_level(self):
+        """chat:manage should be accepted by parse_permissions_arg."""
+        result = parse_permissions_arg(["chat:manage"])
+        assert result == {"chat": "manage"}
 
 
 class TestGetScopesForPermission:
@@ -158,6 +170,28 @@ class TestGetScopesForPermission:
         assert CONTACTS_OTHER_READONLY_SCOPE in scopes
         assert DIRECTORY_READONLY_SCOPE in scopes
 
+    def test_chat_manage_includes_read_and_write_but_not_delete(self):
+        """Chat manage should allow non-destructive write operations."""
+        scopes = get_scopes_for_permission("chat", "manage")
+        assert CHAT_READONLY_SCOPE in scopes
+        assert CHAT_SPACES_READONLY_SCOPE in scopes
+        assert CHAT_MEMBERSHIPS_READONLY_SCOPE in scopes
+        assert CHAT_WRITE_SCOPE in scopes
+        assert CHAT_SPACES_SCOPE in scopes
+        assert CHAT_MEMBERSHIPS_SCOPE in scopes
+        assert CHAT_DELETE_SCOPE not in scopes
+
+    def test_chat_full_includes_manage_and_delete_scopes(self):
+        """Chat full should cumulatively include manage plus delete."""
+        scopes = get_scopes_for_permission("chat", "full")
+        assert CHAT_READONLY_SCOPE in scopes
+        assert CHAT_SPACES_READONLY_SCOPE in scopes
+        assert CHAT_MEMBERSHIPS_READONLY_SCOPE in scopes
+        assert CHAT_WRITE_SCOPE in scopes
+        assert CHAT_SPACES_SCOPE in scopes
+        assert CHAT_MEMBERSHIPS_SCOPE in scopes
+        assert CHAT_DELETE_SCOPE in scopes
+
 
 @pytest.fixture(autouse=True)
 def _reset_permissions_state():
@@ -219,3 +253,13 @@ class TestIsActionDenied:
         """A service with no SERVICE_DENIED_ACTIONS entry should allow all actions."""
         set_permissions({"gmail": "readonly"})
         assert is_action_denied("gmail", "delete") is False
+
+    def test_chat_manage_denies_delete_space(self):
+        """Chat manage should deny destructive space deletion."""
+        set_permissions({"chat": "manage"})
+        assert is_action_denied("chat", "delete_space") is True
+
+    def test_chat_full_allows_delete_space(self):
+        """Chat full should allow destructive space deletion."""
+        set_permissions({"chat": "full"})
+        assert is_action_denied("chat", "delete_space") is False

@@ -8,15 +8,16 @@ import base64
 import logging
 import asyncio
 import ssl
-from typing import Dict, List, Optional
+from typing import Dict, List, Literal, Optional
 
 import httpx
 from googleapiclient.errors import HttpError
 
 # Auth & server utilities
+from auth.permissions import is_action_denied
 from auth.service_decorator import require_google_service, require_multiple_services
 from core.server import server
-from core.utils import TransientNetworkError, handle_http_errors
+from core.utils import TransientNetworkError, UserInputError, handle_http_errors
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +132,19 @@ def _extract_rich_links(msg: dict) -> List[str]:
             if uri and uri not in text:
                 urls.append(uri)
     return urls
+
+
+def _human_membership_body(member_email: str) -> dict:
+    """Build a Chat human membership body from an email or users/* alias."""
+    member_name = (
+        member_email if member_email.startswith("users/") else f"users/{member_email}"
+    )
+    return {
+        "member": {
+            "name": member_name,
+            "type": "HUMAN",
+        }
+    }
 
 
 @server.tool()
@@ -764,6 +778,296 @@ async def get_space(
 
 
 @server.tool()
+@require_google_service("chat", ["chat_spaces", "chat_memberships"])
+@handle_http_errors("create_space", service_type="chat")
+async def create_space(
+    service,
+    user_google_email: str,
+    display_name: str = "",
+    space_type: Literal["SPACE", "GROUP_CHAT", "DIRECT_MESSAGE"] = "SPACE",
+    member_emails: Optional[List[str]] = None,
+    description: Optional[str] = None,
+    guidelines: Optional[str] = None,
+    external_user_allowed: bool = False,
+) -> str:
+    """
+    Creates a Google Chat space, group chat, or direct message.
+
+    Args:
+        display_name: Required for SPACE. Leave empty for no-name GROUP_CHAT and
+                      DIRECT_MESSAGE spaces, where the Chat API forbids names.
+        space_type: SPACE creates a named 1-to-many collaboration space and is
+                    the right choice for a private space shared by the caller
+                    and one other person. GROUP_CHAT creates an unnamed group
+                    conversation and requires at least two member_emails because
+                    the caller is added automatically. DIRECT_MESSAGE creates
+                    or finds a 1:1 DM and requires exactly one member_email.
+        member_emails: Human users to invite, excluding the caller. The setup
+                       API accepts at most 49 initial memberships in addition
+                       to the automatically-added caller.
+        description: SPACE-only description stored in spaceDetails.
+        guidelines: SPACE-only guidelines stored in spaceDetails.
+        external_user_allowed: Allows external Google Chat users when creating
+                               a Workspace space, subject to admin policy.
+
+    Returns:
+        str: Confirmation with the Chat space resource name for follow-up calls.
+
+    Notes:
+        If Google creates the space but omits blocked or disallowed members, this
+        tool does not roll back the space. Deleting it requires chat.delete.
+    """
+    space_type_value = space_type.upper().strip()
+    valid_space_types = {"SPACE", "GROUP_CHAT", "DIRECT_MESSAGE"}
+    if space_type_value not in valid_space_types:
+        raise UserInputError(
+            f"Invalid space_type '{space_type}'. Must be one of: "
+            f"{', '.join(sorted(valid_space_types))}"
+        )
+
+    members = []
+    for member_email in member_emails or []:
+        normalized = member_email.strip()
+        if not normalized:
+            raise UserInputError("member_emails cannot contain blank values.")
+        if normalized.lower() in {
+            user_google_email.lower(),
+            f"users/{user_google_email.lower()}",
+        }:
+            raise UserInputError(
+                "member_emails must omit the caller; Chat adds the caller automatically."
+            )
+        members.append(normalized)
+
+    if len(members) > 49:
+        raise UserInputError(
+            f"spaces.setup supports at most 49 member_emails; got {len(members)}"
+        )
+
+    if space_type_value == "GROUP_CHAT" and len(members) < 2:
+        raise UserInputError(
+            "GROUP_CHAT requires at least two member_emails because the caller "
+            "is added automatically."
+        )
+    if space_type_value == "DIRECT_MESSAGE" and len(members) != 1:
+        raise UserInputError(
+            "DIRECT_MESSAGE requires exactly one member_email because the caller "
+            "is added automatically."
+        )
+    if space_type_value != "SPACE" and (
+        description is not None or guidelines is not None
+    ):
+        raise UserInputError("description and guidelines are only supported for SPACE.")
+
+    space_body = {"spaceType": space_type_value}
+    if external_user_allowed:
+        space_body["externalUserAllowed"] = True
+
+    if space_type_value == "SPACE":
+        if not display_name.strip():
+            raise UserInputError("display_name is required when space_type is SPACE.")
+        space_body["displayName"] = display_name.strip()
+        if description is not None or guidelines is not None:
+            details = {}
+            if description is not None:
+                details["description"] = description
+            if guidelines is not None:
+                details["guidelines"] = guidelines
+            space_body["spaceDetails"] = details
+    else:
+        if display_name.strip():
+            raise UserInputError(
+                "display_name is only supported when space_type is SPACE."
+            )
+        if space_type_value == "DIRECT_MESSAGE":
+            space_body["singleUserBotDm"] = False
+
+    request_body = {"space": space_body}
+    if members:
+        request_body["memberships"] = [
+            _human_membership_body(member_email) for member_email in members
+        ]
+
+    logger.info(
+        f"[create_space] Caller: '{user_google_email}', Type: '{space_type_value}', "
+        f"Members: {len(members)}"
+    )
+
+    space = await asyncio.to_thread(
+        lambda: service.spaces().setup(body=request_body).execute()
+    )
+
+    space_name = space.get("name", "")
+    resolved_display_name = space.get("displayName") or display_name.strip()
+    lines = [
+        f"Space created: {space_name}",
+        f"  Type: {space.get('spaceType', space_type_value)}",
+    ]
+    if resolved_display_name:
+        lines.append(f"  Display name: {resolved_display_name}")
+    if members:
+        lines.append(f"  Requested initial members: {len(members)}")
+    space_uri = space.get("spaceUri")
+    if space_uri:
+        lines.append(f"  URL: {space_uri}")
+
+    return "\n".join(lines)
+
+
+@server.tool()
+@require_google_service("chat", "chat_spaces")
+@handle_http_errors("update_space", service_type="chat")
+async def update_space(
+    service,
+    user_google_email: str,
+    space_id: str,
+    display_name: Optional[str] = None,
+    description: Optional[str] = None,
+    guidelines: Optional[str] = None,
+    space_history_state: Optional[Literal["HISTORY_ON", "HISTORY_OFF"]] = None,
+) -> str:
+    """
+    Updates supported Google Chat space fields.
+
+    Args:
+        space_id: Full space resource name, such as "spaces/AAAA".
+        display_name: New display name for SPACE-type spaces.
+        description: New spaceDetails description. When this or guidelines is
+                     supplied, the existing sibling field is fetched and
+                     preserved because Chat patches spaceDetails as one field.
+        guidelines: New spaceDetails guidelines.
+        space_history_state: HISTORY_ON or HISTORY_OFF. Patched separately when
+                             combined with other fields because Chat requires
+                             this update mask to be used by itself.
+
+    Returns:
+        str: Confirmation with the updated space resource name and fields.
+    """
+    if (
+        display_name is None
+        and description is None
+        and guidelines is None
+        and space_history_state is None
+    ):
+        raise UserInputError("At least one update field is required.")
+
+    if display_name is not None and not display_name.strip():
+        raise UserInputError("display_name cannot be blank.")
+
+    valid_history_states = {"HISTORY_ON", "HISTORY_OFF"}
+    if (
+        space_history_state is not None
+        and space_history_state not in valid_history_states
+    ):
+        raise UserInputError(
+            "space_history_state must be 'HISTORY_ON' or 'HISTORY_OFF'."
+        )
+
+    logger.info(f"[update_space] Caller: '{user_google_email}', Space: '{space_id}'")
+
+    body = {"name": space_id}
+    update_mask_fields = []
+    updated_fields = []
+
+    if display_name is not None:
+        body["displayName"] = display_name.strip()
+        update_mask_fields.append("displayName")
+        updated_fields.append("displayName")
+
+    if description is not None or guidelines is not None:
+        existing_space = await asyncio.to_thread(
+            lambda: service.spaces().get(name=space_id).execute()
+        )
+        existing_details = existing_space.get("spaceDetails") or {}
+        body["spaceDetails"] = {
+            "description": (
+                description
+                if description is not None
+                else existing_details.get("description", "")
+            ),
+            "guidelines": (
+                guidelines
+                if guidelines is not None
+                else existing_details.get("guidelines", "")
+            ),
+        }
+        update_mask_fields.append("spaceDetails")
+        if description is not None:
+            updated_fields.append("spaceDetails.description")
+        if guidelines is not None:
+            updated_fields.append("spaceDetails.guidelines")
+
+    last_response = None
+    if update_mask_fields:
+        last_response = await asyncio.to_thread(
+            lambda: (
+                service.spaces()
+                .patch(
+                    name=space_id,
+                    updateMask=",".join(update_mask_fields),
+                    body=body,
+                )
+                .execute()
+            )
+        )
+
+    if space_history_state is not None:
+        last_response = await asyncio.to_thread(
+            lambda: (
+                service.spaces()
+                .patch(
+                    name=space_id,
+                    updateMask="spaceHistoryState",
+                    body={"name": space_id, "spaceHistoryState": space_history_state},
+                )
+                .execute()
+            )
+        )
+        updated_fields.append("spaceHistoryState")
+
+    response_space_id = (last_response or {}).get("name", space_id)
+    return (
+        f"Space updated: {response_space_id}\n"
+        f"  Updated fields: {', '.join(updated_fields)}"
+    )
+
+
+@server.tool()
+@require_google_service("chat", ["chat_spaces", "chat_delete"])
+@handle_http_errors("delete_space", service_type="chat")
+async def delete_space(
+    service,
+    user_google_email: str,
+    space_id: str,
+) -> str:
+    """
+    Irreversibly deletes a named Google Chat space.
+
+    Deleting a space cascades to its messages, memberships, and attachments.
+    Google requires the caller to be a space manager or the creator.
+
+    Args:
+        space_id: Full space resource name, such as "spaces/AAAA".
+
+    Returns:
+        str: Confirmation that the space was deleted.
+    """
+    if is_action_denied("chat", "delete_space"):
+        raise UserInputError(
+            "The 'delete_space' action is not allowed under the current permission level."
+        )
+
+    logger.info(f"[delete_space] Caller: '{user_google_email}', Space: '{space_id}'")
+
+    await asyncio.to_thread(lambda: service.spaces().delete(name=space_id).execute())
+
+    return (
+        f"Deleted space {space_id}. Messages, memberships, and attachments were "
+        "also deleted."
+    )
+
+
+@server.tool()
 @require_google_service("chat", "chat_spaces_readonly")
 @handle_http_errors("find_direct_message", is_read_only=True, service_type="chat")
 async def find_direct_message(
@@ -850,8 +1154,7 @@ async def find_group_chats(
 
     normalized = [u if u.startswith("users/") else f"users/{u}" for u in users]
     logger.info(
-        f"[find_group_chats] Caller: '{user_google_email}', "
-        f"Members: {normalized}"
+        f"[find_group_chats] Caller: '{user_google_email}', Members: {normalized}"
     )
 
     resp = await asyncio.to_thread(
@@ -915,9 +1218,7 @@ async def list_space_members(
     if filter is not None:
         kwargs["filter"] = filter
 
-    resp = await asyncio.to_thread(
-        service.spaces().members().list(**kwargs).execute
-    )
+    resp = await asyncio.to_thread(service.spaces().members().list(**kwargs).execute)
 
     memberships = resp.get("memberships", [])
     if not memberships:
@@ -925,6 +1226,7 @@ async def list_space_members(
 
     lines = [f"Memberships in {space_id} ({len(memberships)} shown):"]
     for m in memberships:
+        membership_name = m.get("name", "")
         member = m.get("member") or {}
         member_name = member.get("name", "")
         member_type = member.get("type", "UNKNOWN")
@@ -932,6 +1234,8 @@ async def list_space_members(
         state = m.get("state", "")
         created = m.get("createTime", "")
         lines.append(f"  - {member_name} ({member_type})")
+        if membership_name:
+            lines.append(f"      Membership: {membership_name}")
         if role:
             lines.append(f"      Role: {role}")
         if state:
@@ -943,6 +1247,130 @@ async def list_space_members(
     if next_token:
         lines.append(f"\n(More members available; nextPageToken={next_token})")
 
+    return "\n".join(lines)
+
+
+@server.tool()
+@require_google_service("chat", "chat_memberships")
+@handle_http_errors("manage_space_member", service_type="chat")
+async def manage_space_member(
+    service,
+    user_google_email: str,
+    action: Literal["add", "remove", "update"],
+    space_id: str,
+    member_email: Optional[str] = None,
+    membership_name: Optional[str] = None,
+    role: Optional[
+        Literal["ROLE_MEMBER", "ROLE_ASSISTANT_MANAGER", "ROLE_MANAGER"]
+    ] = None,
+) -> str:
+    """
+    Adds, removes, or updates a Google Chat space member.
+
+    Args:
+        action: "add", "remove", or "update".
+        space_id: Full space resource name, such as "spaces/AAAA". Required
+                  for add and included in output for every action.
+        member_email: Human user email, or a users/* alias, required for add.
+        membership_name: Full membership resource name like
+                         "spaces/AAAA/members/BBBB". Required for remove and
+                         update. Obtain it from list_space_members.
+        role: Required for update. ROLE_MEMBER is a regular Chat member,
+              ROLE_ASSISTANT_MANAGER is a Chat UI Manager, and ROLE_MANAGER
+              is a Chat UI Owner.
+
+    Returns:
+        str: Confirmation with the membership resource name where applicable.
+
+    Notes:
+        Chat API responses canonicalize users/email aliases to numeric users/*
+        resource names, so the returned member might differ from member_email.
+    """
+    action = action.lower().strip()
+    valid_actions = ("add", "remove", "update")
+    if action not in valid_actions:
+        raise UserInputError(
+            f"Invalid action '{action}'. Must be 'add', 'remove', or 'update'."
+        )
+
+    if is_action_denied("chat", action):
+        raise UserInputError(
+            f"The '{action}' action is not allowed under the current permission level."
+        )
+
+    logger.info(
+        f"[manage_space_member] Caller: '{user_google_email}', "
+        f"Action: '{action}', Space: '{space_id}'"
+    )
+
+    if action == "add":
+        if not member_email or not member_email.strip():
+            raise UserInputError("member_email is required for the 'add' action.")
+        membership = await asyncio.to_thread(
+            lambda: (
+                service.spaces()
+                .members()
+                .create(
+                    parent=space_id,
+                    body=_human_membership_body(member_email.strip()),
+                )
+                .execute()
+            )
+        )
+        member = membership.get("member") or {}
+        lines = [
+            f"Member added to {space_id}",
+            f"  Membership: {membership.get('name', '')}",
+            f"  Member: {member.get('name', '')}",
+        ]
+        if membership.get("role"):
+            lines.append(f"  Role: {membership['role']}")
+        if membership.get("state"):
+            lines.append(f"  State: {membership['state']}")
+        return "\n".join(lines)
+
+    if not membership_name or not membership_name.strip():
+        raise UserInputError(f"membership_name is required for the '{action}' action.")
+
+    if action == "remove":
+        await asyncio.to_thread(
+            lambda: (
+                service.spaces()
+                .members()
+                .delete(name=membership_name.strip())
+                .execute()
+            )
+        )
+        return f"Removed membership {membership_name.strip()} from {space_id}."
+
+    valid_roles = {"ROLE_MEMBER", "ROLE_ASSISTANT_MANAGER", "ROLE_MANAGER"}
+    if role not in valid_roles:
+        raise UserInputError(
+            "role is required for the 'update' action and must be one of: "
+            f"{', '.join(sorted(valid_roles))}"
+        )
+
+    membership = await asyncio.to_thread(
+        lambda: (
+            service.spaces()
+            .members()
+            .patch(
+                name=membership_name.strip(),
+                updateMask="role",
+                body={"name": membership_name.strip(), "role": role},
+            )
+            .execute()
+        )
+    )
+    member = membership.get("member") or {}
+    lines = [
+        f"Member updated in {space_id}",
+        f"  Membership: {membership.get('name', membership_name.strip())}",
+        f"  Member: {member.get('name', '')}",
+        f"  Role: {membership.get('role', role)}",
+    ]
+    if membership.get("state"):
+        lines.append(f"  State: {membership['state']}")
     return "\n".join(lines)
 
 
@@ -975,9 +1403,7 @@ async def join_space(
             "type": "HUMAN",
         },
     }
-    logger.info(
-        f"[join_space] Caller: '{user_google_email}' joining '{space_id}'"
-    )
+    logger.info(f"[join_space] Caller: '{user_google_email}' joining '{space_id}'")
 
     membership = await asyncio.to_thread(
         service.spaces().members().create(parent=space_id, body=body).execute
@@ -986,12 +1412,7 @@ async def join_space(
     name = membership.get("name", "")
     role = membership.get("role", "")
     state = membership.get("state", "")
-    return (
-        f"Joined {space_id}\n"
-        f"  Membership: {name}\n"
-        f"  Role: {role}\n"
-        f"  State: {state}"
-    )
+    return f"Joined {space_id}\n  Membership: {name}\n  Role: {role}\n  State: {state}"
 
 
 @server.tool()
@@ -1016,9 +1437,7 @@ async def leave_space(
         str: Confirmation that the membership was removed.
     """
     membership_name = f"{space_id}/members/{user_google_email}"
-    logger.info(
-        f"[leave_space] Caller: '{user_google_email}' leaving '{space_id}'"
-    )
+    logger.info(f"[leave_space] Caller: '{user_google_email}' leaving '{space_id}'")
 
     await asyncio.to_thread(
         service.spaces().members().delete(name=membership_name).execute

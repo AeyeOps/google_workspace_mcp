@@ -42,8 +42,11 @@ CHAT_READONLY_SCOPE = "https://www.googleapis.com/auth/chat.messages.readonly"
 CHAT_WRITE_SCOPE = "https://www.googleapis.com/auth/chat.messages"
 CHAT_SPACES_SCOPE = "https://www.googleapis.com/auth/chat.spaces"
 CHAT_SPACES_READONLY_SCOPE = "https://www.googleapis.com/auth/chat.spaces.readonly"
-CHAT_MEMBERSHIPS_READONLY_SCOPE = "https://www.googleapis.com/auth/chat.memberships.readonly"
+CHAT_MEMBERSHIPS_READONLY_SCOPE = (
+    "https://www.googleapis.com/auth/chat.memberships.readonly"
+)
 CHAT_MEMBERSHIPS_SCOPE = "https://www.googleapis.com/auth/chat.memberships"
+CHAT_DELETE_SCOPE = "https://www.googleapis.com/auth/chat.delete"
 
 # Google Sheets API scopes
 SHEETS_READONLY_SCOPE = "https://www.googleapis.com/auth/spreadsheets.readonly"
@@ -166,6 +169,7 @@ CHAT_SCOPES = [
     CHAT_SPACES_READONLY_SCOPE,
     CHAT_MEMBERSHIPS_READONLY_SCOPE,
     CHAT_MEMBERSHIPS_SCOPE,
+    CHAT_DELETE_SCOPE,
 ]
 
 SHEETS_SCOPES = [SHEETS_READONLY_SCOPE, SHEETS_WRITE_SCOPE, DRIVE_READONLY_SCOPE]
@@ -222,7 +226,11 @@ TOOL_READONLY_SCOPES_MAP = {
     "calendar": [CALENDAR_READONLY_SCOPE],
     "docs": [DOCS_READONLY_SCOPE, DRIVE_READONLY_SCOPE],
     "sheets": [SHEETS_READONLY_SCOPE, DRIVE_READONLY_SCOPE],
-    "chat": [CHAT_READONLY_SCOPE, CHAT_SPACES_READONLY_SCOPE, CHAT_MEMBERSHIPS_READONLY_SCOPE],
+    "chat": [
+        CHAT_READONLY_SCOPE,
+        CHAT_SPACES_READONLY_SCOPE,
+        CHAT_MEMBERSHIPS_READONLY_SCOPE,
+    ],
     "forms": [FORMS_BODY_READONLY_SCOPE, FORMS_RESPONSES_READONLY_SCOPE],
     "slides": [SLIDES_READONLY_SCOPE],
     "tasks": [TASKS_READONLY_SCOPE],
