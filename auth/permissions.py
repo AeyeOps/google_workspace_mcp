@@ -10,6 +10,7 @@ Usage:
 
 Gmail levels: readonly, organize, drafts, send, full
 Tasks levels: readonly, manage, full
+Chat levels: readonly, manage, full
 Other services: readonly, full (extensible by adding entries to SERVICE_PERMISSION_LEVELS)
 """
 
@@ -39,6 +40,7 @@ from auth.scopes import (
     CHAT_SPACES_READONLY_SCOPE,
     CHAT_MEMBERSHIPS_READONLY_SCOPE,
     CHAT_MEMBERSHIPS_SCOPE,
+    CHAT_DELETE_SCOPE,
     FORMS_BODY_SCOPE,
     FORMS_BODY_READONLY_SCOPE,
     FORMS_RESPONSES_READONLY_SCOPE,
@@ -90,7 +92,8 @@ SERVICE_PERMISSION_LEVELS: Dict[str, List[Tuple[str, List[str]]]] = {
     ],
     "chat": [
         ("readonly", [CHAT_READONLY_SCOPE, CHAT_SPACES_READONLY_SCOPE, CHAT_MEMBERSHIPS_READONLY_SCOPE]),
-        ("full", [CHAT_WRITE_SCOPE, CHAT_SPACES_SCOPE, CHAT_MEMBERSHIPS_SCOPE]),
+        ("manage", [CHAT_WRITE_SCOPE, CHAT_SPACES_SCOPE, CHAT_MEMBERSHIPS_SCOPE]),
+        ("full", [CHAT_DELETE_SCOPE]),
     ],
     "forms": [
         ("readonly", [FORMS_BODY_READONLY_SCOPE, FORMS_RESPONSES_READONLY_SCOPE]),
@@ -147,6 +150,9 @@ SERVICE_PERMISSION_LEVELS: Dict[str, List[Tuple[str, List[str]]]] = {
 SERVICE_DENIED_ACTIONS: Dict[str, Dict[str, FrozenSet[str]]] = {
     "tasks": {
         "manage": frozenset({"delete", "clear_completed"}),
+    },
+    "chat": {
+        "manage": frozenset({"delete_space"}),
     },
 }
 

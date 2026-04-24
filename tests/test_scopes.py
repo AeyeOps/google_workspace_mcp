@@ -15,6 +15,8 @@ from auth.scopes import (
     BASE_SCOPES,
     CALENDAR_READONLY_SCOPE,
     CALENDAR_SCOPE,
+    CHAT_DELETE_SCOPE,
+    CHAT_SCOPES,
     CHAT_MEMBERSHIPS_READONLY_SCOPE,
     CHAT_SPACES_SCOPE,
     CONTACTS_OTHER_READONLY_SCOPE,
@@ -201,6 +203,10 @@ class TestHasRequiredScopes:
         assert not has_required_scopes(
             [CHAT_SPACES_SCOPE], [CHAT_MEMBERSHIPS_READONLY_SCOPE]
         )
+
+    def test_chat_delete_scope_is_in_chat_scope_set(self):
+        """Chat full-scope aggregation should include the destructive delete scope."""
+        assert CHAT_DELETE_SCOPE in CHAT_SCOPES
 
     # Other hierarchies
     def test_calendar_covers_readonly(self):

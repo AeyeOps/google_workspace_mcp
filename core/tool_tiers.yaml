@@ -105,9 +105,13 @@ chat:
     - find_group_chats
     - list_space_members
     - download_chat_attachment
+    - create_space
+    - update_space
+    - manage_space_member
   complete:
     - join_space
     - leave_space
+    - delete_space
 
 forms:
   core:

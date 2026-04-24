@@ -241,6 +241,7 @@ def main():
             "Granular per-service permission levels. Format: service:level. "
             "Example: --permissions gmail:organize drive:readonly. "
             "Gmail levels: readonly, organize, drafts, send, full (cumulative). "
+            "Tasks and Chat levels: readonly, manage, full. "
             "Other services: readonly, full. "
             "Mutually exclusive with --read-only and --tools."
         ),
