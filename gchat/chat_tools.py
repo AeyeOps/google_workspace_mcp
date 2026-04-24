@@ -1226,6 +1226,7 @@ async def list_space_members(
 
     lines = [f"Memberships in {space_id} ({len(memberships)} shown):"]
     for m in memberships:
+        membership_name = m.get("name", "")
         member = m.get("member") or {}
         member_name = member.get("name", "")
         member_type = member.get("type", "UNKNOWN")
@@ -1233,6 +1234,8 @@ async def list_space_members(
         state = m.get("state", "")
         created = m.get("createTime", "")
         lines.append(f"  - {member_name} ({member_type})")
+        if membership_name:
+            lines.append(f"      Membership: {membership_name}")
         if role:
             lines.append(f"      Role: {role}")
         if state:

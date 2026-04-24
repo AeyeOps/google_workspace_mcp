@@ -1,11 +1,15 @@
 import os
 import sys
+from types import SimpleNamespace
 
 import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import main
+from auth.permissions import set_permissions
+from auth.scopes import CHAT_DELETE_SCOPE, CHAT_MEMBERSHIPS_SCOPE, CHAT_SPACES_SCOPE
+from core import tool_registry
 
 
 def test_resolve_permissions_mode_selection_without_tier():
@@ -58,3 +62,65 @@ def test_permissions_and_tools_flags_are_rejected(monkeypatch, capsys):
     assert exc.value.code == 1
     captured = capsys.readouterr()
     assert "--permissions and --tools cannot be combined" in captured.err
+
+
+def test_chat_manage_filters_delete_space_tool_from_registered_surface():
+    delete_tool = SimpleNamespace(
+        fn=SimpleNamespace(
+            _required_google_scopes=[CHAT_SPACES_SCOPE, CHAT_DELETE_SCOPE]
+        )
+    )
+    create_tool = SimpleNamespace(
+        fn=SimpleNamespace(
+            _required_google_scopes=[CHAT_SPACES_SCOPE, CHAT_MEMBERSHIPS_SCOPE]
+        )
+    )
+
+    class Provider:
+        def __init__(self):
+            self.removed = []
+            self._components = {
+                "tool:delete_space@v1": delete_tool,
+                "tool:create_space@v1": create_tool,
+            }
+
+        def remove_tool(self, name):
+            self.removed.append(name)
+
+    provider = Provider()
+    server = SimpleNamespace(local_provider=provider)
+
+    set_permissions({"chat": "manage"})
+    try:
+        tool_registry.filter_server_tools(server)
+    finally:
+        set_permissions(None)
+
+    assert provider.removed == ["delete_space"]
+
+
+def test_chat_full_keeps_delete_space_tool_registered():
+    delete_tool = SimpleNamespace(
+        fn=SimpleNamespace(
+            _required_google_scopes=[CHAT_SPACES_SCOPE, CHAT_DELETE_SCOPE]
+        )
+    )
+
+    class Provider:
+        def __init__(self):
+            self.removed = []
+            self._components = {"tool:delete_space@v1": delete_tool}
+
+        def remove_tool(self, name):
+            self.removed.append(name)
+
+    provider = Provider()
+    server = SimpleNamespace(local_provider=provider)
+
+    set_permissions({"chat": "full"})
+    try:
+        tool_registry.filter_server_tools(server)
+    finally:
+        set_permissions(None)
+
+    assert provider.removed == []

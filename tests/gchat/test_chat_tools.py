@@ -462,6 +462,38 @@ async def test_manage_space_member_validates_required_fields(kwargs, message):
     service.spaces().members().patch.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_list_space_members_outputs_membership_resource_name():
+    """list_space_members should expose names usable by update/remove member calls."""
+    service = Mock()
+    members = service.spaces.return_value.members.return_value
+    members.list.return_value.execute.return_value = {
+        "memberships": [
+            {
+                "name": "spaces/S/members/123",
+                "member": {"name": "users/123", "type": "HUMAN"},
+                "role": "ROLE_MEMBER",
+                "state": "JOINED",
+                "createTime": "2026-01-01T00:00:00Z",
+            }
+        ]
+    }
+
+    from gchat.chat_tools import list_space_members
+
+    result = await _unwrap(list_space_members)(
+        service=service,
+        user_google_email="owner@example.com",
+        space_id="spaces/S",
+        show_invited=True,
+    )
+
+    members.list.assert_called_once_with(
+        parent="spaces/S", pageSize=100, showInvited=True
+    )
+    assert "Membership: spaces/S/members/123" in result
+
+
 # ---------------------------------------------------------------------------
 # get_messages: attachment metadata appears in output
 # ---------------------------------------------------------------------------
