@@ -15,6 +15,9 @@ import os
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
+from auth.permissions import set_permissions
+from core.utils import UserInputError
+
 
 def _make_message(text="Hello", attachments=None, msg_name="spaces/S/messages/M"):
     """Build a minimal Chat API message dict for testing."""
@@ -52,6 +55,411 @@ def _unwrap(tool):
     while hasattr(fn, "__wrapped__"):
         fn = fn.__wrapped__
     return fn
+
+
+# ---------------------------------------------------------------------------
+# space management: request construction and validation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_create_space_builds_named_space_setup_body():
+    """create_space should pass a named SPACE body with details and memberships."""
+    service = Mock()
+    service.spaces().setup().execute.return_value = {
+        "name": "spaces/S",
+        "spaceType": "SPACE",
+        "displayName": "Ops Room",
+        "spaceUri": "https://chat.google.com/room/S",
+    }
+
+    from gchat.chat_tools import create_space
+
+    result = await _unwrap(create_space)(
+        service=service,
+        user_google_email="owner@example.com",
+        display_name="Ops Room",
+        member_emails=["friend@example.com"],
+        description="Deploy coordination",
+        guidelines="Keep it focused",
+        external_user_allowed=True,
+    )
+
+    setup_body = service.spaces().setup.call_args.kwargs["body"]
+    assert setup_body == {
+        "space": {
+            "spaceType": "SPACE",
+            "externalUserAllowed": True,
+            "displayName": "Ops Room",
+            "spaceDetails": {
+                "description": "Deploy coordination",
+                "guidelines": "Keep it focused",
+            },
+        },
+        "memberships": [
+            {"member": {"name": "users/friend@example.com", "type": "HUMAN"}}
+        ],
+    }
+    assert "Space created: spaces/S" in result
+    assert "Requested initial members: 1" in result
+
+
+@pytest.mark.asyncio
+async def test_create_space_builds_direct_message_setup_body():
+    """DIRECT_MESSAGE setup should omit displayName/details and set singleUserBotDm false."""
+    service = Mock()
+    service.spaces().setup().execute.return_value = {
+        "name": "spaces/DM",
+        "spaceType": "DIRECT_MESSAGE",
+    }
+
+    from gchat.chat_tools import create_space
+
+    result = await _unwrap(create_space)(
+        service=service,
+        user_google_email="owner@example.com",
+        space_type="DIRECT_MESSAGE",
+        member_emails=["friend@example.com"],
+    )
+
+    setup_body = service.spaces().setup.call_args.kwargs["body"]
+    assert setup_body == {
+        "space": {
+            "spaceType": "DIRECT_MESSAGE",
+            "singleUserBotDm": False,
+        },
+        "memberships": [
+            {"member": {"name": "users/friend@example.com", "type": "HUMAN"}}
+        ],
+    }
+    assert "Space created: spaces/DM" in result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({}, "display_name is required"),
+        (
+            {
+                "display_name": "Group",
+                "space_type": "GROUP_CHAT",
+                "member_emails": ["a@example.com", "b@example.com"],
+            },
+            "display_name is only supported",
+        ),
+        (
+            {
+                "display_name": "DM",
+                "space_type": "DIRECT_MESSAGE",
+                "member_emails": ["a@example.com"],
+            },
+            "display_name is only supported",
+        ),
+        (
+            {"space_type": "GROUP_CHAT", "member_emails": ["a@example.com"]},
+            "GROUP_CHAT requires at least two",
+        ),
+        (
+            {"space_type": "DIRECT_MESSAGE", "member_emails": []},
+            "DIRECT_MESSAGE requires exactly one",
+        ),
+        (
+            {
+                "space_type": "DIRECT_MESSAGE",
+                "member_emails": ["a@example.com"],
+                "description": "Nope",
+            },
+            "description and guidelines are only supported",
+        ),
+        (
+            {
+                "display_name": "Too Many",
+                "member_emails": [f"user{i}@example.com" for i in range(50)],
+            },
+            "at most 49",
+        ),
+        (
+            {"display_name": "Self", "member_emails": ["owner@example.com"]},
+            "must omit the caller",
+        ),
+    ],
+)
+async def test_create_space_validates_inputs(kwargs, message):
+    """create_space should reject invalid combinations before calling Chat."""
+    service = Mock()
+
+    from gchat.chat_tools import create_space
+
+    with pytest.raises(UserInputError, match=message):
+        await _unwrap(create_space)(
+            service=service,
+            user_google_email="owner@example.com",
+            **kwargs,
+        )
+
+    service.spaces().setup.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_update_space_preserves_space_details_sibling_fields():
+    """Updating one spaceDetails field should fetch and preserve the omitted sibling."""
+    service = Mock()
+    spaces = service.spaces.return_value
+    spaces.get.return_value.execute.return_value = {
+        "spaceDetails": {
+            "description": "Old description",
+            "guidelines": "Old guidelines",
+        }
+    }
+    spaces.patch.return_value.execute.return_value = {"name": "spaces/S"}
+
+    from gchat.chat_tools import update_space
+
+    result = await _unwrap(update_space)(
+        service=service,
+        user_google_email="owner@example.com",
+        space_id="spaces/S",
+        description="New description",
+    )
+
+    spaces.get.assert_called_once_with(name="spaces/S")
+    patch_kwargs = spaces.patch.call_args.kwargs
+    assert patch_kwargs["name"] == "spaces/S"
+    assert patch_kwargs["updateMask"] == "spaceDetails"
+    assert patch_kwargs["body"] == {
+        "name": "spaces/S",
+        "spaceDetails": {
+            "description": "New description",
+            "guidelines": "Old guidelines",
+        },
+    }
+    assert "Space updated: spaces/S" in result
+    assert "spaceDetails.description" in result
+
+
+@pytest.mark.asyncio
+async def test_update_space_patches_history_state_separately():
+    """spaceHistoryState must be patched in a separate request from other masks."""
+    service = Mock()
+    spaces = service.spaces.return_value
+    spaces.get.return_value.execute.return_value = {
+        "spaceDetails": {"description": "Old", "guidelines": "Old guide"}
+    }
+    spaces.patch.return_value.execute.side_effect = [
+        {"name": "spaces/S"},
+        {"name": "spaces/S"},
+    ]
+
+    from gchat.chat_tools import update_space
+
+    await _unwrap(update_space)(
+        service=service,
+        user_google_email="owner@example.com",
+        space_id="spaces/S",
+        display_name="New name",
+        guidelines="New guide",
+        space_history_state="HISTORY_ON",
+    )
+
+    patch_calls = spaces.patch.call_args_list
+    assert len(patch_calls) == 2
+    assert patch_calls[0].kwargs["updateMask"] == "displayName,spaceDetails"
+    assert patch_calls[0].kwargs["body"] == {
+        "name": "spaces/S",
+        "displayName": "New name",
+        "spaceDetails": {
+            "description": "Old",
+            "guidelines": "New guide",
+        },
+    }
+    assert patch_calls[1].kwargs == {
+        "name": "spaces/S",
+        "updateMask": "spaceHistoryState",
+        "body": {"name": "spaces/S", "spaceHistoryState": "HISTORY_ON"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_update_space_requires_at_least_one_field():
+    """update_space should reject no-op calls before making an API request."""
+    service = Mock()
+
+    from gchat.chat_tools import update_space
+
+    with pytest.raises(UserInputError, match="At least one update field"):
+        await _unwrap(update_space)(
+            service=service,
+            user_google_email="owner@example.com",
+            space_id="spaces/S",
+        )
+
+    service.spaces().patch.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_delete_space_denied_at_chat_manage_before_api_call():
+    """chat:manage should produce a local UserInputError before spaces.delete."""
+    service = Mock()
+
+    from gchat.chat_tools import delete_space
+
+    set_permissions({"chat": "manage"})
+    try:
+        with pytest.raises(UserInputError, match="delete_space"):
+            await _unwrap(delete_space)(
+                service=service,
+                user_google_email="owner@example.com",
+                space_id="spaces/S",
+            )
+    finally:
+        set_permissions(None)
+
+    service.spaces().delete.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_delete_space_calls_spaces_delete_when_allowed():
+    """chat:full should allow delete_space to call spaces.delete by resource name."""
+    service = Mock()
+    spaces = service.spaces.return_value
+    spaces.delete.return_value.execute.return_value = {}
+
+    from gchat.chat_tools import delete_space
+
+    set_permissions({"chat": "full"})
+    try:
+        result = await _unwrap(delete_space)(
+            service=service,
+            user_google_email="owner@example.com",
+            space_id="spaces/S",
+        )
+    finally:
+        set_permissions(None)
+
+    spaces.delete.assert_called_once_with(name="spaces/S")
+    assert "Deleted space spaces/S" in result
+
+
+@pytest.mark.asyncio
+async def test_manage_space_member_adds_human_member_by_email_alias():
+    """manage_space_member(add) should create a human membership using users/{email}."""
+    service = Mock()
+    members = service.spaces.return_value.members.return_value
+    members.create.return_value.execute.return_value = {
+        "name": "spaces/S/members/123",
+        "member": {"name": "users/123"},
+        "role": "ROLE_MEMBER",
+        "state": "JOINED",
+    }
+
+    from gchat.chat_tools import manage_space_member
+
+    result = await _unwrap(manage_space_member)(
+        service=service,
+        user_google_email="owner@example.com",
+        action="add",
+        space_id="spaces/S",
+        member_email="friend@example.com",
+    )
+
+    members.create.assert_called_once_with(
+        parent="spaces/S",
+        body={"member": {"name": "users/friend@example.com", "type": "HUMAN"}},
+    )
+    assert "Membership: spaces/S/members/123" in result
+    assert "Member: users/123" in result
+
+
+@pytest.mark.asyncio
+async def test_manage_space_member_removes_membership_by_name():
+    """manage_space_member(remove) should delete the supplied membership resource."""
+    service = Mock()
+    members = service.spaces.return_value.members.return_value
+    members.delete.return_value.execute.return_value = {}
+
+    from gchat.chat_tools import manage_space_member
+
+    result = await _unwrap(manage_space_member)(
+        service=service,
+        user_google_email="owner@example.com",
+        action="remove",
+        space_id="spaces/S",
+        membership_name="spaces/S/members/123",
+    )
+
+    members.delete.assert_called_once_with(name="spaces/S/members/123")
+    assert "Removed membership spaces/S/members/123" in result
+
+
+@pytest.mark.asyncio
+async def test_manage_space_member_updates_assistant_manager_role():
+    """manage_space_member(update) should patch role, including assistant manager."""
+    service = Mock()
+    members = service.spaces.return_value.members.return_value
+    members.patch.return_value.execute.return_value = {
+        "name": "spaces/S/members/123",
+        "member": {"name": "users/123"},
+        "role": "ROLE_ASSISTANT_MANAGER",
+    }
+
+    from gchat.chat_tools import manage_space_member
+
+    result = await _unwrap(manage_space_member)(
+        service=service,
+        user_google_email="owner@example.com",
+        action="update",
+        space_id="spaces/S",
+        membership_name="spaces/S/members/123",
+        role="ROLE_ASSISTANT_MANAGER",
+    )
+
+    members.patch.assert_called_once_with(
+        name="spaces/S/members/123",
+        updateMask="role",
+        body={"name": "spaces/S/members/123", "role": "ROLE_ASSISTANT_MANAGER"},
+    )
+    assert "Role: ROLE_ASSISTANT_MANAGER" in result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"action": "invite"}, "Invalid action"),
+        ({"action": "add"}, "member_email is required"),
+        ({"action": "remove"}, "membership_name is required"),
+        (
+            {"action": "update", "membership_name": "spaces/S/members/123"},
+            "role is required",
+        ),
+        (
+            {
+                "action": "update",
+                "membership_name": "spaces/S/members/123",
+                "role": "ROLE_OWNER",
+            },
+            "role is required",
+        ),
+    ],
+)
+async def test_manage_space_member_validates_required_fields(kwargs, message):
+    """manage_space_member should reject invalid dispatcher inputs locally."""
+    service = Mock()
+
+    from gchat.chat_tools import manage_space_member
+
+    with pytest.raises(UserInputError, match=message):
+        await _unwrap(manage_space_member)(
+            service=service,
+            user_google_email="owner@example.com",
+            space_id="spaces/S",
+            **kwargs,
+        )
+
+    service.spaces().members().create.assert_not_called()
+    service.spaces().members().delete.assert_not_called()
+    service.spaces().members().patch.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
