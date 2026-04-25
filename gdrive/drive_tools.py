@@ -39,6 +39,7 @@ from core.http_utils import (
 from gdrive.drive_helpers import (
     DRIVE_QUERY_PATTERNS,
     FOLDER_MIME_TYPE,
+    SHORTCUT_MIME_TYPE,
     build_drive_list_params,
     check_public_link_permission,
     format_permission_info,
@@ -684,6 +685,83 @@ async def create_drive_folder(
     )
     return await _create_drive_folder_impl(
         service, user_google_email, folder_name, parent_folder_id
+    )
+
+
+async def _create_drive_shortcut_impl(
+    service,
+    user_google_email: str,
+    shortcut_name: str,
+    target_file_id: str,
+    parent_folder_id: str = "root",
+) -> str:
+    """Internal implementation for create_drive_shortcut. Used by tests."""
+    resolved_folder_id = await resolve_folder_id(service, parent_folder_id)
+    file_metadata = {
+        "name": shortcut_name,
+        "mimeType": SHORTCUT_MIME_TYPE,
+        "parents": [resolved_folder_id],
+        "shortcutDetails": {"targetId": target_file_id},
+    }
+    created_file = await asyncio.to_thread(
+        service.files()
+        .create(
+            body=file_metadata,
+            fields="id, name, webViewLink, shortcutDetails(targetId, targetMimeType)",
+            supportsAllDrives=True,
+        )
+        .execute
+    )
+    link = created_file.get("webViewLink", "")
+    shortcut_details = created_file.get("shortcutDetails") or {}
+    resolved_target = shortcut_details.get("targetId", target_file_id)
+    return (
+        f"Successfully created shortcut '{created_file.get('name', shortcut_name)}' "
+        f"(ID: {created_file.get('id', 'N/A')}) pointing to target '{resolved_target}' "
+        f"in folder '{parent_folder_id}' for {user_google_email}. Link: {link}"
+    )
+
+
+@server.tool()
+@handle_http_errors("create_drive_shortcut", service_type="drive")
+@require_google_service("drive", "drive_file")
+async def create_drive_shortcut(
+    service,
+    user_google_email: str,
+    shortcut_name: str,
+    target_file_id: str,
+    parent_folder_id: str = "root",
+) -> str:
+    """
+    Creates a Google Drive shortcut pointing at an existing file or folder.
+
+    Shortcuts are first-class Drive entities (mimeType
+    application/vnd.google-apps.shortcut). They let you group references to
+    files owned by others (e.g. "Shared with me" items) into a folder you
+    own without moving or copying the original. The target cannot be changed
+    after creation — to re-point a shortcut, delete it and create a new one.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        shortcut_name (str): The display name for the shortcut.
+        target_file_id (str): The Drive file or folder ID the shortcut points to.
+        parent_folder_id (str): The ID of the folder to create the shortcut in.
+            Defaults to 'root'. For shared drives, use a folder ID within that
+            shared drive.
+
+    Returns:
+        str: Confirmation message with shortcut name, ID, target ID, and link.
+    """
+    logger.info(
+        f"[create_drive_shortcut] Invoked. Email: '{user_google_email}', "
+        f"Name: '{shortcut_name}', Target: '{target_file_id}', Parent: '{parent_folder_id}'"
+    )
+    return await _create_drive_shortcut_impl(
+        service,
+        user_google_email,
+        shortcut_name,
+        target_file_id,
+        parent_folder_id,
     )
 
 

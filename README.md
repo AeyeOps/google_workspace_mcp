@@ -781,6 +781,7 @@ cp .env.oauth21 .env
 | <sub>`get_drive_file_download_url`</sub> | <sub>Core</sub> | <sub>Download Drive files to local disk</sub> |
 | <sub>`create_drive_file`</sub> | <sub>Core</sub> | <sub>Create files or fetch from URLs</sub> |
 | <sub>`create_drive_folder`</sub> | <sub>Core</sub> | <sub>Create empty folders in Drive or shared drives</sub> |
+| <sub>`create_drive_shortcut`</sub> | <sub>Core</sub> | <sub>Create a shortcut to an existing Drive file or folder</sub> |
 | <sub>`import_to_google_doc`</sub> | <sub>Core</sub> | <sub>Import files (MD, DOCX, HTML, etc.) as Google Docs</sub> |
 | <sub>`get_drive_shareable_link`</sub> | <sub>Core</sub> | <sub>Get shareable links for a file</sub> |
 | <sub>`list_drive_items`</sub> | <sub>Extended</sub> | <sub>List folder contents</sub> |
