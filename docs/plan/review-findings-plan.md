@@ -1,6 +1,6 @@
 # Review Findings Remediation Plan
 
-Source: conversation context from `aeodlc-review-code` on the Chat space-management implementation.
+Source: conversation context from the post-restart `workspace-mm` MCP live check.
 
 ## Status
 
@@ -11,16 +11,14 @@ Spec scope: NOT EVALUATED
 
 | F-ID | Severity | Finding | Action | Status | Verification |
 | --- | --- | --- | --- | --- | --- |
-| F-001 | P1 | `list_space_members` did not emit membership resource names needed by `manage_space_member(update/remove)`. | Add `Membership: spaces/.../members/...` to each listed member row and cover it with a focused Chat tool test. | Completed | `uv run pytest tests/gchat/test_chat_tools.py` |
-| F-002 | P2 | The plan expected `delete_space` to raise a local `UserInputError` under `chat:manage`, but the live MCP registry filters the tool out because `chat.delete` is outside the selected scope set. | Align docs/plan wording with actual registry behavior and add component coverage proving `chat:manage` filters `delete_space` while `chat:full` keeps it. | Completed | `uv run pytest tests/test_main_permissions_tier.py tests/test_permissions.py` |
+| F-001 | P2 | `update_drive_file` dereferenced Drive shortcut IDs before applying metadata updates, so trashing/updating a shortcut affected the shortcut target instead of the shortcut file. | Update `update_drive_file` to read and update the caller-supplied file ID directly while preserving shortcut resolution for parent-folder arguments. | Completed | `uv run ruff check gdrive/drive_tools.py`; one-off mocked update call; focused Drive tests |
 
 ## Milestones
 
-1. Emit chainable membership identifiers from `list_space_members`.
-2. Align permission-surface documentation with actual MCP tool filtering.
-3. Add regression coverage for membership output and permission filtering.
-4. Run focused and lightweight repo verification.
+1. Preserve caller-supplied IDs in `update_drive_file`.
+2. Keep shortcut resolution for parent folder arguments via `resolve_folder_id`.
+3. Verify the update path targets the shortcut ID directly.
 
 ## Remaining Work
 
-None for the reviewed findings.
+None for the reviewed finding.

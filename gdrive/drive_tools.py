@@ -1515,12 +1515,15 @@ async def update_drive_file(
         "name, description, mimeType, parents, starred, trashed, webViewLink, "
         "writersCanShare, copyRequiresWriterPermission, properties"
     )
-    resolved_file_id, current_file = await resolve_drive_item(
-        service,
-        file_id,
-        extra_fields=current_file_fields,
+    current_file = await asyncio.to_thread(
+        service.files()
+        .get(
+            fileId=file_id,
+            fields=current_file_fields,
+            supportsAllDrives=True,
+        )
+        .execute
     )
-    file_id = resolved_file_id
 
     # Build the update body with only specified fields
     update_body = {}
