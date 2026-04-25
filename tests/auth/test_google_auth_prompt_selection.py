@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import pytest
+
 from google.auth.exceptions import RefreshError
 
 from auth.google_auth import _determine_oauth_prompt
@@ -29,7 +31,10 @@ def _credentials_with_scopes(scopes, valid=True, refresh_token="fake-token"):
     return SimpleNamespace(scopes=scopes, valid=valid, refresh_token=refresh_token)
 
 
-def test_prompt_select_account_when_existing_credentials_cover_scopes(monkeypatch):
+@pytest.mark.asyncio
+async def test_prompt_select_account_when_existing_credentials_cover_scopes(
+    monkeypatch,
+):
     required_scopes = ["scope.a", "scope.b"]
     monkeypatch.setattr(
         "auth.google_auth.get_oauth21_session_store",
@@ -43,7 +48,7 @@ def test_prompt_select_account_when_existing_credentials_cover_scopes(monkeypatc
     )
     monkeypatch.setattr("auth.google_auth.is_stateless_mode", lambda: False)
 
-    prompt = _determine_oauth_prompt(
+    prompt = await _determine_oauth_prompt(
         user_google_email="user@gmail.com",
         required_scopes=required_scopes,
         session_id=None,
@@ -52,7 +57,8 @@ def test_prompt_select_account_when_existing_credentials_cover_scopes(monkeypatc
     assert prompt == "select_account"
 
 
-def test_prompt_consent_when_credentials_revoked(monkeypatch):
+@pytest.mark.asyncio
+async def test_prompt_consent_when_credentials_revoked(monkeypatch):
     """When credentials have required scopes but refresh fails (revoked),
     prompt must be 'consent' so Google performs full re-authorization."""
     required_scopes = ["scope.a", "scope.b"]
@@ -73,7 +79,7 @@ def test_prompt_consent_when_credentials_revoked(monkeypatch):
     )
     monkeypatch.setattr("auth.google_auth.is_stateless_mode", lambda: False)
 
-    prompt = _determine_oauth_prompt(
+    prompt = await _determine_oauth_prompt(
         user_google_email="user@gmail.com",
         required_scopes=required_scopes,
         session_id=None,
@@ -82,7 +88,8 @@ def test_prompt_consent_when_credentials_revoked(monkeypatch):
     assert prompt == "consent"
 
 
-def test_prompt_consent_when_existing_credentials_missing_scopes(monkeypatch):
+@pytest.mark.asyncio
+async def test_prompt_consent_when_existing_credentials_missing_scopes(monkeypatch):
     monkeypatch.setattr(
         "auth.google_auth.get_oauth21_session_store",
         lambda: _DummySessionStore(),
@@ -95,7 +102,7 @@ def test_prompt_consent_when_existing_credentials_missing_scopes(monkeypatch):
     )
     monkeypatch.setattr("auth.google_auth.is_stateless_mode", lambda: False)
 
-    prompt = _determine_oauth_prompt(
+    prompt = await _determine_oauth_prompt(
         user_google_email="user@gmail.com",
         required_scopes=["scope.a", "scope.b"],
         session_id=None,
@@ -104,7 +111,8 @@ def test_prompt_consent_when_existing_credentials_missing_scopes(monkeypatch):
     assert prompt == "consent"
 
 
-def test_prompt_consent_when_no_existing_credentials(monkeypatch):
+@pytest.mark.asyncio
+async def test_prompt_consent_when_no_existing_credentials(monkeypatch):
     monkeypatch.setattr(
         "auth.google_auth.get_oauth21_session_store",
         lambda: _DummySessionStore(),
@@ -115,7 +123,7 @@ def test_prompt_consent_when_no_existing_credentials(monkeypatch):
     )
     monkeypatch.setattr("auth.google_auth.is_stateless_mode", lambda: False)
 
-    prompt = _determine_oauth_prompt(
+    prompt = await _determine_oauth_prompt(
         user_google_email="new_user@gmail.com",
         required_scopes=["scope.a"],
         session_id=None,
@@ -124,7 +132,8 @@ def test_prompt_consent_when_no_existing_credentials(monkeypatch):
     assert prompt == "consent"
 
 
-def test_prompt_uses_session_mapping_when_email_not_provided(monkeypatch):
+@pytest.mark.asyncio
+async def test_prompt_uses_session_mapping_when_email_not_provided(monkeypatch):
     session_id = "session-123"
     required_scopes = ["scope.a"]
     monkeypatch.setattr(
@@ -142,7 +151,7 @@ def test_prompt_uses_session_mapping_when_email_not_provided(monkeypatch):
     )
     monkeypatch.setattr("auth.google_auth.is_stateless_mode", lambda: False)
 
-    prompt = _determine_oauth_prompt(
+    prompt = await _determine_oauth_prompt(
         user_google_email=None,
         required_scopes=required_scopes,
         session_id=session_id,

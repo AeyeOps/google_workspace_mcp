@@ -178,7 +178,7 @@ This server sends no data anywhere except Google's APIs, on behalf of the authen
 - **You control the network** — deploy behind your reverse proxy, in your VPC, on your own terms
 - **No third-party services** — no intermediary servers, no token relays, no hosted backends
 - **Stateless mode** — zero disk writes for locked-down container environments
-- **Sensitive path blocking** — `.env`, `.ssh/`, `.aws/`, and credential files are blocked regardless of configuration
+- **Sensitive path blocking** — local file reads default to the managed attachment directory, and `validate_file_path()` still blocks `.env*` files plus common home-directory credential stores such as `~/.ssh/` and `~/.aws/` even if `ALLOWED_FILE_DIRS` is broadened
 
 Full dependency tree in `pyproject.toml`, pinned in `uv.lock`.
 
@@ -282,7 +282,7 @@ uv run main.py --transport streamable-http --tools gmail drive calendar
 | `WORKSPACE_MCP_PORT` | | Listening port — default `8000` |
 | `WORKSPACE_MCP_HOST` | | Bind host — default `0.0.0.0` |
 | `WORKSPACE_EXTERNAL_URL` | | External URL for reverse proxy setups |
-| `WORKSPACE_ATTACHMENT_DIR` | | Downloaded attachments dir — default `~/.workspace-mcp/attachments/` |
+| `WORKSPACE_ATTACHMENT_DIR` | | Downloaded attachments dir and default trusted local attachment directory — default `~/.workspace-mcp/attachments/` |
 | `WORKSPACE_MCP_URL` | | Remote MCP endpoint URL for CLI |
 | `ALLOWED_FILE_DIRS` | | Colon-separated allowlist for local file reads |
 | **🔑 OAuth 2.1 & Multi-User** | | |
@@ -294,6 +294,14 @@ uv run main.py --transport streamable-http --tools gmail drive calendar
 | `OAUTH_ALLOWED_ORIGINS` | | Comma-separated additional CORS origins |
 | `WORKSPACE_MCP_OAUTH_PROXY_STORAGE_BACKEND` | | `memory`, `disk`, or `valkey` — see [storage backends](#oauth-proxy-storage-backends) |
 | `FASTMCP_SERVER_AUTH_GOOGLE_JWT_SIGNING_KEY` | | Custom encryption key for OAuth proxy storage; required for public OAuth 2.1 clients when `GOOGLE_OAUTH_CLIENT_SECRET` is omitted |
+| `WORKSPACE_MCP_ALLOWED_CLIENT_REDIRECT_URIS` | | Comma-separated allowlist of redirect URIs that dynamically-registered OAuth clients may use. Default is unset (any URI permitted, per DCR). Supports FastMCP's glob patterns (`*`, `*.example.com`) |
+| **🗄️ Credential Store** | | |
+| `WORKSPACE_MCP_CREDENTIAL_STORE_BACKEND` | | `local_directory` (default) or `gcs` — see [credential store system](#credential-store-system) |
+| `WORKSPACE_MCP_CREDENTIALS_DIR` | | Directory for the `local_directory` backend |
+| `GOOGLE_MCP_CREDENTIALS_DIR` | | Backward-compatible alias for `WORKSPACE_MCP_CREDENTIALS_DIR` |
+| `WORKSPACE_MCP_GCS_BUCKET` | | **Required when backend is `gcs`** — GCS bucket name |
+| `WORKSPACE_MCP_GCS_PREFIX` | | Optional object-name prefix for the `gcs` backend |
+| `WORKSPACE_MCP_GCS_REQUIRE_CMEK` | | `true` to require a bucket default KMS key at startup (fails fast if unset) |
 | **🔧 Service Account** | | |
 | `GOOGLE_SERVICE_ACCOUNT_KEY_FILE` | | Path to service account JSON key file (domain-wide delegation) |
 | `GOOGLE_SERVICE_ACCOUNT_KEY_JSON` | | Inline service account JSON key (alternative to file) |
@@ -326,6 +334,14 @@ uv run main.py --transport streamable-http --tools gmail drive calendar
 ### Prerequisites
 
 **Python 3.10+** · **[uv/uvx](https://github.com/astral-sh/uv)** · **Google Cloud Project** with OAuth 2.0 credentials
+
+If you want the GCS credential store backend, install the optional dependency first:
+
+```bash
+uv sync --extra gcs
+# or
+pip install "workspace-mcp[gcs]"
+```
 
 ### Configuration
 
@@ -1108,6 +1124,20 @@ FastMCP ships a native `GoogleProvider` that we now rely on directly. It solves 
 
 The result is a leaner server that still enables any OAuth 2.1 compliant client (including browser-based ones) to authenticate through Google without bespoke code.
 
+**Restricting DCR client redirect URIs:**
+
+By default, any client going through Dynamic Client Registration can declare any `redirect_uri`. For publicly-exposed deployments, this is a phishing vector — an attacker can register a client with a `redirect_uri` they control and harvest authorization codes from tricked users. Set `WORKSPACE_MCP_ALLOWED_CLIENT_REDIRECT_URIS` to a comma-separated allowlist of permitted URIs:
+
+```bash
+# Public deployment — restrict to Claude's hosted OAuth callbacks
+export WORKSPACE_MCP_ALLOWED_CLIENT_REDIRECT_URIS="https://claude.ai/api/mcp/auth_callback,https://claude.com/api/mcp/auth_callback"
+
+# Add Claude Code CLI (loopback redirects on ephemeral ports)
+export WORKSPACE_MCP_ALLOWED_CLIENT_REDIRECT_URIS="https://claude.ai/api/mcp/auth_callback,https://claude.com/api/mcp/auth_callback,http://localhost:*/callback,http://127.0.0.1:*/callback"
+```
+
+Patterns use FastMCP's matcher: `*` wildcards any port or path component; `*.example.com` matches subdomains. Leaving the variable unset preserves the default DCR behaviour (any URI accepted), which is appropriate for local development but unsafe for public deployments.
+
 </details>
 
 ### Stateless Mode (Container-Friendly)
@@ -1475,29 +1505,54 @@ async def your_new_tool(service, param1: str, param2: int = 10):
 
 ### Credential Store System
 
-The server includes an abstract credential store API and a default backend for managing Google OAuth
-credentials with support for multiple storage backends:
+The server includes an abstract credential store API with pluggable backends for managing Google OAuth credentials:
 
 **Features:**
 - **Abstract Interface**: `CredentialStore` base class defines standard operations (get, store, delete, list users)
-- **Local File Storage**: `LocalDirectoryCredentialStore` implementation stores credentials as JSON files
-- **Configurable Storage**: Environment variable `GOOGLE_MCP_CREDENTIALS_DIR` sets storage location
+- **Local File Storage**: `LocalDirectoryCredentialStore` — plaintext JSON files protected by filesystem permissions (0o600 / 0o700)
+- **GCS-Backed Storage**: `GCSCredentialStore` — stores each user's credentials as an object in a Google Cloud Storage bucket. Supports atomic read-modify-write via generation preconditions, first-class Cloud IAM / Audit Logs integration, and transparent bucket-level CMEK encryption at rest
+- **Configurable Storage**: Environment variables select backend and location
 - **Multi-User Support**: Store and manage credentials for multiple Google accounts
-- **Automatic Directory Creation**: Storage directory is created automatically if it doesn't exist
+- **Automatic Directory Creation**: Storage directory is created automatically if it doesn't exist (local backend)
 
 **Configuration:**
 ```bash
-# Optional: Set custom credentials directory
+# Install the optional dependency if you plan to use the GCS backend:
+# uv sync --extra gcs
+# or: pip install "workspace-mcp[gcs]"
+#
+# Select backend (default: local_directory). Supported: local_directory, gcs
+export WORKSPACE_MCP_CREDENTIAL_STORE_BACKEND="gcs"
+
+# --- local_directory options ---
+export WORKSPACE_MCP_CREDENTIALS_DIR="/path/to/credentials"
+# Backward-compatible alias:
 export GOOGLE_MCP_CREDENTIALS_DIR="/path/to/credentials"
 
-# Default locations (if GOOGLE_MCP_CREDENTIALS_DIR not set):
+# Default directory locations (if no directory env var is set):
 # - ~/.google_workspace_mcp/credentials (if home directory accessible)
 # - ./.credentials (fallback)
+
+# --- gcs options ---
+export WORKSPACE_MCP_GCS_BUCKET="my-workspace-mcp-tokens"   # required
+export WORKSPACE_MCP_GCS_PREFIX="credentials/"              # optional
+export WORKSPACE_MCP_GCS_REQUIRE_CMEK="true"                # optional; see below
 ```
+
+**Backend selection:**
+- `local_directory` (default): Plaintext JSON records. Suitable for local development and single-user stdio mode.
+  Existing pre-URL-encoding local credential filenames remain readable during migration; new writes use the URL-encoded filename mapping unless a legacy file already exists for that user.
+- `gcs`: Stores credentials as objects in a GCS bucket using the JSON API. Authenticates via Application Default Credentials — on Cloud Run this means the runtime service account needs `roles/storage.objectUser` (or equivalent) on the bucket. Does not support `list_users()` — designed for multi-user OAuth 2.1 mode where users are looked up individually by email.
+
+**CMEK enforcement (gcs backend):**
+
+By default GCS encrypts objects with Google-managed keys. For customer-managed encryption, set a default KMS key on the bucket (e.g. via Terraform's `google_storage_bucket.encryption.default_kms_key_name`). All credentials written to the bucket will inherit the key transparently — no application-level key to manage.
+
+To guard against accidentally deploying against a bucket without CMEK, set `WORKSPACE_MCP_GCS_REQUIRE_CMEK=true`. The store will verify the bucket has a default KMS key at startup and refuse to initialize otherwise. Note that this check reads bucket metadata, so the runtime service account additionally needs `storage.buckets.get` — grant `roles/storage.bucketViewer` on the bucket (or a custom role containing `storage.buckets.get`) in addition to the object-level role. `roles/storage.objectUser` alone covers only object operations.
 
 **Usage Example:**
 ```python
-from auth.credential_store import get_credential_store
+from auth.credential_store import get_credential_store, LocalDirectoryCredentialStore
 
 # Get the global credential store instance
 store = get_credential_store()
@@ -1508,8 +1563,11 @@ store.store_credential("user@example.com", credentials)
 # Retrieve credentials
 creds = store.get_credential("user@example.com")
 
-# List all users with stored credentials
-users = store.list_users()
+# List all users with stored credentials (local_directory backend only;
+# GCSCredentialStore intentionally does not support enumeration — use the
+# upstream identity provider to enumerate users instead).
+if isinstance(store, LocalDirectoryCredentialStore):
+    users = store.list_users()
 ```
 
 The credential store automatically handles credential serialization, expiry parsing, and provides error handling for storage operations.
@@ -1523,12 +1581,13 @@ The credential store automatically handles credential serialization, expiry pars
 - **Transport-Aware Callbacks**: Stdio mode starts a minimal HTTP server only for OAuth, ensuring callbacks work in all modes
 - **Production**: Use HTTPS & OAuth 2.1 and configure accordingly
 - **Scope Minimization**: Tools request only necessary permissions
-- **Local File Access Control**: Tools that read local files (e.g., attachments, `file://` uploads) are restricted to the user's home directory by default. Override this with the `ALLOWED_FILE_DIRS` environment variable:
+- **Local File Access Control**: Tools that read local files (e.g., attachments, `file://` uploads) are restricted to the managed attachment directory by default. Override this with the `ALLOWED_FILE_DIRS` environment variable if you intentionally need broader access:
   ```bash
   # Colon-separated list of directories (semicolon on Windows) from which local file reads are permitted
   export ALLOWED_FILE_DIRS="/home/user/documents:/data/shared"
   ```
-  Regardless of the allowlist, access to sensitive paths (`.env`, `.ssh/`, `.aws/`, `/etc/shadow`, credential files, etc.) is always blocked.
+  The managed attachment directory is controlled by `WORKSPACE_ATTACHMENT_DIR` and remains allowed even when `ALLOWED_FILE_DIRS` is set. Regardless of the allowlist, access to sensitive paths (`.env`, `.ssh/`, `.aws/`, `/etc/shadow`, credential files, etc.) is always blocked.
+- **Indirect Prompt Injection**: In agentic clients, email bodies, documents, and calendar events can contain malicious instructions that try to coerce the model into exfiltrating local files. Do not broaden `ALLOWED_FILE_DIRS` unless you trust the client, the model behavior, and the data sources it can read.
 
 ---
 

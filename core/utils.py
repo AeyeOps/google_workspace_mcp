@@ -92,22 +92,32 @@ that send ``'{"key":"val"}'`` instead of ``{"key": "val"}``.
 
 
 # Directories from which local file reads are allowed.
-# The user's home directory is the default safe base.
+# By default, only the managed attachment storage directory is trusted.
 # Override via ALLOWED_FILE_DIRS env var (os.pathsep-separated paths).
 _ALLOWED_FILE_DIRS_ENV = "ALLOWED_FILE_DIRS"
 
 
 def _get_allowed_file_dirs() -> list[Path]:
     """Return the list of directories from which local file access is permitted."""
+    from core.attachment_storage import STORAGE_DIR
+
+    allowed_dirs: list[Path] = [STORAGE_DIR]
     env_val = os.environ.get(_ALLOWED_FILE_DIRS_ENV)
     if env_val:
-        return [
-            Path(p).expanduser().resolve()
+        allowed_dirs.extend(
+            Path(p_stripped).expanduser().resolve()
             for p in env_val.split(os.pathsep)
-            if p.strip()
-        ]
-    home = Path.home()
-    return [home] if home else []
+            if (p_stripped := p.strip())
+        )
+
+    unique_dirs: list[Path] = []
+    seen: set[Path] = set()
+    for path in allowed_dirs:
+        if path in seen:
+            continue
+        seen.add(path)
+        unique_dirs.append(path)
+    return unique_dirs
 
 
 def validate_file_path(file_path: str) -> Path:
@@ -137,8 +147,10 @@ def validate_file_path(file_path: str) -> Path:
     resolved_str = str(resolved)
     file_name = resolved.name.lower()
 
+    path_parts = [part.lower() for part in resolved.parts]
+
     # Block .env files and variants (.env, .env.local, .env.production, etc.)
-    if file_name == ".env" or file_name.startswith(".env."):
+    if any(part == ".env" or part.startswith(".env.") for part in path_parts):
         raise ValueError(
             f"Access to '{resolved_str}' is not allowed: "
             ".env files may contain secrets and cannot be read, uploaded, or attached."
@@ -161,16 +173,20 @@ def validate_file_path(file_path: str) -> Path:
                 "path is in a restricted system location."
             )
 
-    # Block sensitive directories that commonly contain credentials/keys
-    sensitive_dirs = (
-        ".ssh",
-        ".aws",
+    # Block sensitive directories that commonly contain credentials/keys.
+    if ".ssh" in path_parts or ".aws" in path_parts:
+        raise ValueError(
+            f"Access to '{resolved_str}' is not allowed: "
+            "path is in a directory that commonly contains secrets or credentials."
+        )
+
+    home = Path.home()
+    sensitive_home_dirs = (
         ".kube",
         ".gnupg",
         ".config/gcloud",
     )
-    for sensitive_dir in sensitive_dirs:
-        home = Path.home()
+    for sensitive_dir in sensitive_home_dirs:
         blocked = home / sensitive_dir
         if resolved == blocked or str(resolved).startswith(str(blocked) + "/"):
             raise ValueError(
@@ -203,7 +219,8 @@ def validate_file_path(file_path: str) -> Path:
     if not allowed_dirs:
         raise ValueError(
             "No allowed file directories configured. "
-            "Set the ALLOWED_FILE_DIRS environment variable or ensure a home directory exists."
+            "Set the ALLOWED_FILE_DIRS environment variable or configure "
+            "WORKSPACE_ATTACHMENT_DIR."
         )
 
     for allowed in allowed_dirs:

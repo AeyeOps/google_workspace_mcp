@@ -18,6 +18,7 @@ if sys.platform == "darwin":
 
 
 def _load_startup_dependencies():
+    from auth.credential_store import get_credential_store, get_selected_backend
     from auth.oauth_config import (
         get_oauth_config,
         reload_oauth_config,
@@ -35,6 +36,8 @@ def _load_startup_dependencies():
     )
 
     return (
+        get_selected_backend,
+        get_credential_store,
         get_oauth_config,
         reload_oauth_config,
         is_stateless_mode,
@@ -53,6 +56,8 @@ def _load_startup_dependencies():
 
 
 (
+    get_selected_backend,
+    get_credential_store,
     get_oauth_config,
     reload_oauth_config,
     is_stateless_mode,
@@ -549,8 +554,14 @@ def main():
         safe_print(f"   Impersonating: {user_email}")
         safe_print("")
 
-    # Check credentials directory permissions before starting (skip in stateless/service-account mode)
-    if not is_stateless_mode() and not is_service_account_enabled():
+    backend = get_selected_backend()
+
+    # Check local credentials directory permissions only when using the local backend.
+    if (
+        not is_stateless_mode()
+        and not is_service_account_enabled()
+        and backend != "gcs"
+    ):
         try:
             safe_print("🔍 Checking credentials directory permissions...")
             check_credentials_directory_permissions()
@@ -564,11 +575,41 @@ def main():
             logger.error(f"Failed credentials directory permission check: {e}")
             sys.exit(1)
     else:
-        skip_reason = (
-            "stateless mode" if is_stateless_mode() else "service account mode"
-        )
+        if is_stateless_mode():
+            skip_reason = "stateless mode"
+        elif is_service_account_enabled():
+            skip_reason = "service account mode"
+        else:
+            skip_reason = "gcs backend"
         safe_print(f"🔍 Skipping credentials directory check ({skip_reason})")
         safe_print("")
+
+    if (
+        backend == "gcs"
+        and not is_stateless_mode()
+        and not is_service_account_enabled()
+    ):
+        try:
+            from auth.credential_store import GCSCredentialStore
+
+            credential_store = get_credential_store()
+            if not isinstance(credential_store, GCSCredentialStore):
+                raise TypeError(
+                    "Configured credential store backend is 'gcs' but the store instance is not GCSCredentialStore"
+                )
+
+            if credential_store.require_cmek:
+                safe_print("🔍 Verifying GCS credential store configuration...")
+                credential_store.verify_cmek()
+                safe_print("✅ GCS credential store configuration verified")
+            else:
+                safe_print(
+                    "ℹ️ GCS credential store verification skipped (require_cmek=False)"
+                )
+            safe_print("")
+        except Exception as e:
+            safe_print(f"❌ GCS credential store verification failed: {e}")
+            sys.exit(1)
 
     try:
         # Set transport mode for OAuth callback handling
