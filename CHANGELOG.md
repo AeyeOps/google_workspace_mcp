@@ -4,6 +4,17 @@ All notable changes to the AeyeOps fork of `google_workspace_mcp` are documented
 here. The format is loosely based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **`create_drive_shortcut` tool** — creates a Drive shortcut
+  (`application/vnd.google-apps.shortcut`) that points at an existing file or
+  folder, in a chosen parent folder. Uses the existing `drive_file` scope.
+  Registered in `drive.core` tier. Enables grouping "Shared with me" files
+  into a user-owned folder without copying or moving originals. The MCP
+  already dereferences shortcuts on read via `resolve_drive_item`; this
+  closes the corresponding write-side gap.
+
 ## [1.20.0] — 2026-04-20
 
 ### Added
