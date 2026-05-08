@@ -1,14 +1,83 @@
 # Google Drive Tools Reference
 
-MCP tools for Google Drive file management, search, content retrieval, and permission control. All tools require `user_google_email` (string, required).
+MCP tools for Google Drive shared-drive lifecycle, file management, search, content retrieval, and permission control. All tools require `user_google_email` (string, required).
 
 ## Contents
+- Shared Drive lifecycle: list_shared_drives, get_shared_drive, create_shared_drive, update_shared_drive, hide_shared_drive, unhide_shared_drive, delete_shared_drive
 - Search & Browse: search_drive_files, list_drive_items
 - Content & Download: get_drive_file_content, get_drive_file_download_url
 - Create & Modify: create_drive_file, create_drive_folder, copy_drive_file, update_drive_file
 - Permissions & Sharing: set_drive_file_permissions, manage_drive_access, get_drive_file_permissions, get_drive_shareable_link, check_drive_file_public_access
 - Import: import_to_google_doc
 - Tips
+
+---
+
+## Shared Drive lifecycle
+
+These tools manage Shared Drive containers through Drive API v3 `drives.*`.
+Use `create_drive_folder` only for folders inside My Drive or an existing Shared
+Drive; it does not create the Shared Drive container itself.
+
+### list_shared_drives
+List Shared Drive containers visible to the authenticated user.
+
+| Parameter | Type | Required | Default | Notes |
+|-----------|------|----------|---------|-------|
+| user_google_email | string | yes | | |
+| page_size | integer | no | 100 | Max Shared Drives to return |
+| page_token | string | no | | Pagination token |
+| query | string | no | | Drive API shared-drive query string |
+| use_domain_admin_access | boolean | no | false | Request domain-admin access when available |
+
+### get_shared_drive
+Get Shared Drive metadata by ID.
+
+| Parameter | Type | Required | Default | Notes |
+|-----------|------|----------|---------|-------|
+| user_google_email | string | yes | | |
+| drive_id | string | yes | | Shared Drive ID |
+| use_domain_admin_access | boolean | no | false | Request domain-admin access when available |
+
+### create_shared_drive
+Create a Shared Drive container.
+
+| Parameter | Type | Required | Default | Notes |
+|-----------|------|----------|---------|-------|
+| user_google_email | string | yes | | |
+| drive_name | string | yes | | New Shared Drive name |
+| request_id | string | no | generated UUID | Idempotency key for Drive API `drives.create` |
+
+### update_shared_drive
+Update Shared Drive metadata or restrictions.
+
+| Parameter | Type | Required | Default | Notes |
+|-----------|------|----------|---------|-------|
+| user_google_email | string | yes | | |
+| drive_id | string | yes | | Shared Drive ID |
+| drive_name | string | no | | New Shared Drive name |
+| color_rgb | string | no | | Drive color, e.g. `#3367d6` |
+| theme_id | string | no | | Drive theme ID |
+| restrictions | object | no | | Raw Drive API restrictions object |
+| use_domain_admin_access | boolean | no | false | Request domain-admin access when available |
+
+### hide_shared_drive / unhide_shared_drive
+Hide or restore a Shared Drive in the authenticated user's default Drive view.
+
+| Parameter | Type | Required | Default | Notes |
+|-----------|------|----------|---------|-------|
+| user_google_email | string | yes | | |
+| drive_id | string | yes | | Shared Drive ID |
+
+### delete_shared_drive
+Permanently delete a Shared Drive.
+
+| Parameter | Type | Required | Default | Notes |
+|-----------|------|----------|---------|-------|
+| user_google_email | string | yes | | |
+| drive_id | string | yes | | Shared Drive ID |
+| use_domain_admin_access | boolean | no | false | Request domain-admin access when available |
+| allow_item_deletion | boolean | no | | Pass Drive API `allowItemDeletion` only when explicitly set |
 
 ---
 

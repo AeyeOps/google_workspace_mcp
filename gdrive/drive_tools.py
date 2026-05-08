@@ -8,6 +8,7 @@ import asyncio
 import logging
 import io
 import base64
+import uuid
 
 from typing import Optional, List, Dict, Any, Callable, Awaitable, BinaryIO
 from tempfile import NamedTemporaryFile, SpooledTemporaryFile
@@ -628,6 +629,254 @@ async def list_drive_items(
         formatted_items_text_parts.append(f"nextPageToken: {next_token}")
     text_output = "\n".join(formatted_items_text_parts)
     return text_output
+
+
+SHARED_DRIVE_FIELDS = (
+    "id, name, colorRgb, kind, backgroundImageLink, capabilities, themeId, "
+    "createdTime, hidden, restrictions, orgUnitId"
+)
+
+
+def _format_shared_drive(drive: Dict[str, Any], fallback_name: str = "") -> str:
+    name = drive.get("name", fallback_name)
+    lines = [f"Shared Drive '{name}' (ID: {drive.get('id', 'N/A')})"]
+    for key in (
+        "createdTime",
+        "hidden",
+        "colorRgb",
+        "themeId",
+        "backgroundImageLink",
+        "orgUnitId",
+    ):
+        if key in drive:
+            lines.append(f"{key}: {drive[key]}")
+    if "capabilities" in drive:
+        lines.append(f"capabilities: {drive['capabilities']}")
+    if "restrictions" in drive:
+        lines.append(f"restrictions: {drive['restrictions']}")
+    lines.append(f"webViewLink: https://drive.google.com/drive/folders/{drive.get('id', '')}")
+    return "\n".join(lines)
+
+
+@server.tool()
+@handle_http_errors("list_shared_drives", is_read_only=True, service_type="drive")
+@require_google_service("drive", "drive_read")
+async def list_shared_drives(
+    service,
+    user_google_email: str,
+    page_size: int = 100,
+    page_token: Optional[str] = None,
+    query: Optional[str] = None,
+    use_domain_admin_access: bool = False,
+) -> str:
+    """
+    Lists Shared Drive containers visible to the authenticated Google user.
+
+    Args:
+        user_google_email: The user's Google email address. Required.
+        page_size: Maximum number of shared drives to return.
+        page_token: Page token from a previous list response.
+        query: Optional shared-drive query string accepted by Drive API drives.list.
+        use_domain_admin_access: Issue the request as a domain administrator when available.
+
+    Returns:
+        Formatted Shared Drive metadata. Includes nextPageToken when more results are available.
+    """
+    logger.info(
+        f"[list_shared_drives] Invoked. Email: '{user_google_email}', Query: '{query}'"
+    )
+    list_params: Dict[str, Any] = {
+        "pageSize": page_size,
+        "fields": f"nextPageToken, drives({SHARED_DRIVE_FIELDS})",
+        "useDomainAdminAccess": use_domain_admin_access,
+    }
+    if page_token:
+        list_params["pageToken"] = page_token
+    if query:
+        list_params["q"] = query
+
+    results = await asyncio.to_thread(service.drives().list(**list_params).execute)
+    drives = results.get("drives", [])
+    if not drives:
+        return f"No shared drives found for {user_google_email}."
+
+    lines = [f"Found {len(drives)} shared drives for {user_google_email}:"]
+    lines.extend(_format_shared_drive(drive) for drive in drives)
+    if results.get("nextPageToken"):
+        lines.append(f"nextPageToken: {results['nextPageToken']}")
+    return "\n\n".join(lines)
+
+
+@server.tool()
+@handle_http_errors("get_shared_drive", is_read_only=True, service_type="drive")
+@require_google_service("drive", "drive_read")
+async def get_shared_drive(
+    service,
+    user_google_email: str,
+    drive_id: str,
+    use_domain_admin_access: bool = False,
+) -> str:
+    """Gets metadata for a Shared Drive container by ID."""
+    logger.info(
+        f"[get_shared_drive] Invoked. Email: '{user_google_email}', Drive ID: '{drive_id}'"
+    )
+    drive = await asyncio.to_thread(
+        service.drives()
+        .get(
+            driveId=drive_id,
+            fields=SHARED_DRIVE_FIELDS,
+            useDomainAdminAccess=use_domain_admin_access,
+        )
+        .execute
+    )
+    return _format_shared_drive(drive)
+
+
+@server.tool()
+@handle_http_errors("create_shared_drive", service_type="drive")
+@require_google_service("drive", "drive")
+async def create_shared_drive(
+    service,
+    user_google_email: str,
+    drive_name: str,
+    request_id: Optional[str] = None,
+) -> str:
+    """
+    Creates a Google Shared Drive container.
+
+    Uses Drive API drives.create with an idempotency requestId. Shared Drive
+    restrictions are intentionally not accepted here; create the drive first,
+    then use update_shared_drive for restrictions.
+    """
+    logger.info(
+        f"[create_shared_drive] Invoked. Email: '{user_google_email}', Drive: '{drive_name}'"
+    )
+    resolved_request_id = request_id or str(uuid.uuid4())
+    drive = await asyncio.to_thread(
+        service.drives()
+        .create(
+            requestId=resolved_request_id,
+            body={"name": drive_name},
+            fields=SHARED_DRIVE_FIELDS,
+        )
+        .execute
+    )
+    return (
+        f"Successfully created Shared Drive using requestId '{resolved_request_id}'.\n"
+        f"{_format_shared_drive(drive, drive_name)}"
+    )
+
+
+@server.tool()
+@handle_http_errors("update_shared_drive", service_type="drive")
+@require_google_service("drive", "drive")
+async def update_shared_drive(
+    service,
+    user_google_email: str,
+    drive_id: str,
+    drive_name: Optional[str] = None,
+    color_rgb: Optional[str] = None,
+    theme_id: Optional[str] = None,
+    restrictions: Optional[Dict[str, Any]] = None,
+    use_domain_admin_access: bool = False,
+) -> str:
+    """
+    Updates Shared Drive metadata and restrictions with Drive API drives.update.
+
+    Restrictions are a raw Drive API restrictions object, e.g.
+    {"domainUsersOnly": true, "driveMembersOnly": true}.
+    """
+    logger.info(
+        f"[update_shared_drive] Invoked. Email: '{user_google_email}', Drive ID: '{drive_id}'"
+    )
+    body: Dict[str, Any] = {}
+    if drive_name is not None:
+        body["name"] = drive_name
+    if color_rgb is not None:
+        body["colorRgb"] = color_rgb
+    if theme_id is not None:
+        body["themeId"] = theme_id
+    if restrictions is not None:
+        body["restrictions"] = restrictions
+    if not body:
+        raise ValueError("update_shared_drive requires at least one metadata or restrictions field")
+
+    drive = await asyncio.to_thread(
+        service.drives()
+        .update(
+            driveId=drive_id,
+            body=body,
+            fields=SHARED_DRIVE_FIELDS,
+            useDomainAdminAccess=use_domain_admin_access,
+        )
+        .execute
+    )
+    return f"Successfully updated Shared Drive '{drive_id}'.\n{_format_shared_drive(drive, drive_name or '')}"
+
+
+@server.tool()
+@handle_http_errors("hide_shared_drive", service_type="drive")
+@require_google_service("drive", "drive")
+async def hide_shared_drive(
+    service,
+    user_google_email: str,
+    drive_id: str,
+) -> str:
+    """Hides a Shared Drive from the user's default Drive view."""
+    logger.info(
+        f"[hide_shared_drive] Invoked. Email: '{user_google_email}', Drive ID: '{drive_id}'"
+    )
+    drive = await asyncio.to_thread(
+        service.drives().hide(driveId=drive_id, fields=SHARED_DRIVE_FIELDS).execute
+    )
+    return f"Successfully hid Shared Drive '{drive_id}'.\n{_format_shared_drive(drive)}"
+
+
+@server.tool()
+@handle_http_errors("unhide_shared_drive", service_type="drive")
+@require_google_service("drive", "drive")
+async def unhide_shared_drive(
+    service,
+    user_google_email: str,
+    drive_id: str,
+) -> str:
+    """Restores a hidden Shared Drive to the user's default Drive view."""
+    logger.info(
+        f"[unhide_shared_drive] Invoked. Email: '{user_google_email}', Drive ID: '{drive_id}'"
+    )
+    drive = await asyncio.to_thread(
+        service.drives().unhide(driveId=drive_id, fields=SHARED_DRIVE_FIELDS).execute
+    )
+    return f"Successfully unhid Shared Drive '{drive_id}'.\n{_format_shared_drive(drive)}"
+
+
+@server.tool()
+@handle_http_errors("delete_shared_drive", service_type="drive")
+@require_google_service("drive", "drive")
+async def delete_shared_drive(
+    service,
+    user_google_email: str,
+    drive_id: str,
+    use_domain_admin_access: bool = False,
+    allow_item_deletion: Optional[bool] = None,
+) -> str:
+    """
+    Permanently deletes a Shared Drive for which the user is an organizer.
+
+    Google requires the drive to have no untrashed items unless
+    allow_item_deletion is supported and used with domain admin access.
+    """
+    logger.info(
+        f"[delete_shared_drive] Invoked. Email: '{user_google_email}', Drive ID: '{drive_id}'"
+    )
+    delete_params: Dict[str, Any] = {
+        "driveId": drive_id,
+        "useDomainAdminAccess": use_domain_admin_access,
+    }
+    if allow_item_deletion is not None:
+        delete_params["allowItemDeletion"] = allow_item_deletion
+    await asyncio.to_thread(service.drives().delete(**delete_params).execute)
+    return f"Successfully deleted Shared Drive '{drive_id}' for {user_google_email}."
 
 
 async def _create_drive_folder_impl(

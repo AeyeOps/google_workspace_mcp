@@ -22,6 +22,9 @@ gmail:
 
 drive:
   core:
+    - list_shared_drives
+    - get_shared_drive
+    - create_shared_drive
     - search_drive_files
     - get_drive_file_content
     - get_drive_file_download_url
@@ -31,12 +34,16 @@ drive:
     - import_to_google_doc
     - get_drive_shareable_link
   extended:
+    - update_shared_drive
+    - hide_shared_drive
+    - unhide_shared_drive
     - list_drive_items
     - copy_drive_file
     - update_drive_file
     - manage_drive_access
     - set_drive_file_permissions
   complete:
+    - delete_shared_drive
     - get_drive_file_permissions
     - check_drive_file_public_access
 

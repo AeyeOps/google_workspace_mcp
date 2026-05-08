@@ -66,22 +66,30 @@ export OAUTHLIB_INSECURE_TRANSPORT=1  # Development only
 
 **Also includes:** `get_gmail_attachment_content`, `list_gmail_filters`
 
-### Google Drive (10 tools)
+### Google Drive (22 tools)
 
 | Tool | Tier | Description |
 |------|------|-------------|
+| `list_shared_drives` | Core | List Shared Drive containers visible to the user |
+| `get_shared_drive` | Core | Get Shared Drive container metadata |
+| `create_shared_drive` | Core | Create a Shared Drive container |
 | `search_drive_files` | Core | Search files with Drive query syntax or free text |
 | `get_drive_file_content` | Core | Read content from Docs, Sheets, Office files (.docx, .xlsx, .pptx) |
 | `get_drive_file_download_url` | Core | Download Drive files to local disk |
 | `create_drive_file` | Core | Create files from content or URL (supports file://, http://, https://) |
 | `create_drive_folder` | Core | Create empty folders in Drive or shared drives |
+| `create_drive_shortcut` | Core | Create a shortcut to an existing Drive file or folder |
 | `import_to_google_doc` | Core | Import files (MD, DOCX, HTML, etc.) as Google Docs |
 | `get_drive_shareable_link` | Core | Get shareable links for a file |
+| `update_shared_drive` | Extended | Update Shared Drive metadata and restrictions |
+| `hide_shared_drive` | Extended | Hide a Shared Drive from the default Drive view |
+| `unhide_shared_drive` | Extended | Restore a Shared Drive to the default Drive view |
 | `list_drive_items` | Extended | List folder contents with shared drive support |
 | `copy_drive_file` | Extended | Copy existing files (templates) with optional renaming |
 | `update_drive_file` | Extended | Update metadata, move between folders, star, trash |
 | `manage_drive_access` | Extended | Grant, update, revoke permissions, and transfer ownership |
 | `set_drive_file_permissions` | Extended | Set link sharing and file-level sharing settings |
+| `delete_shared_drive` | Complete | Permanently delete an empty Shared Drive |
 | `get_drive_file_permissions` | Complete | Get detailed file permissions |
 | `check_drive_file_public_access` | Complete | Verify public link sharing for Docs image insertion |
 

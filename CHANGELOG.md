@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Shared Drive lifecycle tools** — adds `list_shared_drives`,
+  `get_shared_drive`, `create_shared_drive`, `update_shared_drive`,
+  `hide_shared_drive`, `unhide_shared_drive`, and `delete_shared_drive`
+  for managing Shared Drive containers through Drive API v3 `drives.*`.
+  Read-only list/get use `drive_read`; lifecycle mutations require full
+  `drive` scope. The docs now distinguish Shared Drive containers from
+  folders inside Shared Drives.
 - **`create_drive_shortcut` tool** — creates a Drive shortcut
   (`application/vnd.google-apps.shortcut`) that points at an existing file or
   folder, in a chosen parent folder. Uses the existing `drive_file` scope.

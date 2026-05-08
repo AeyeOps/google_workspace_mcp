@@ -776,6 +776,9 @@ cp .env.oauth21 .env
 
 | <sub>Tool</sub> | <sub>Tier</sub> | <sub>Description</sub> |
 |------|------|-------------|
+| <sub>`list_shared_drives`</sub> | <sub>Core</sub> | <sub>List Shared Drive containers visible to the user</sub> |
+| <sub>`get_shared_drive`</sub> | <sub>Core</sub> | <sub>Get Shared Drive container metadata</sub> |
+| <sub>`create_shared_drive`</sub> | <sub>Core</sub> | <sub>Create a Shared Drive container</sub> |
 | <sub>`search_drive_files`</sub> | <sub>Core</sub> | <sub>Search files with query syntax</sub> |
 | <sub>`get_drive_file_content`</sub> | <sub>Core</sub> | <sub>Read file content (Office, PDF, image)</sub> |
 | <sub>`get_drive_file_download_url`</sub> | <sub>Core</sub> | <sub>Download Drive files to local disk</sub> |
@@ -784,11 +787,15 @@ cp .env.oauth21 .env
 | <sub>`create_drive_shortcut`</sub> | <sub>Core</sub> | <sub>Create a shortcut to an existing Drive file or folder</sub> |
 | <sub>`import_to_google_doc`</sub> | <sub>Core</sub> | <sub>Import files (MD, DOCX, HTML, etc.) as Google Docs</sub> |
 | <sub>`get_drive_shareable_link`</sub> | <sub>Core</sub> | <sub>Get shareable links for a file</sub> |
+| <sub>`update_shared_drive`</sub> | <sub>Extended</sub> | <sub>Update Shared Drive metadata and restrictions</sub> |
+| <sub>`hide_shared_drive`</sub> | <sub>Extended</sub> | <sub>Hide a Shared Drive from the default Drive view</sub> |
+| <sub>`unhide_shared_drive`</sub> | <sub>Extended</sub> | <sub>Restore a Shared Drive to the default Drive view</sub> |
 | <sub>`list_drive_items`</sub> | <sub>Extended</sub> | <sub>List folder contents</sub> |
 | <sub>`copy_drive_file`</sub> | <sub>Extended</sub> | <sub>Copy existing files (templates) with optional renaming</sub> |
 | <sub>`update_drive_file`</sub> | <sub>Extended</sub> | <sub>Update file metadata, move between folders</sub> |
 | <sub>`manage_drive_access`</sub> | <sub>Extended</sub> | <sub>Grant, update, revoke permissions, and transfer ownership</sub> |
 | <sub>`set_drive_file_permissions`</sub> | <sub>Extended</sub> | <sub>Set link sharing and file-level sharing settings</sub> |
+| <sub>`delete_shared_drive`</sub> | <sub>Complete</sub> | <sub>Permanently delete an empty Shared Drive</sub> |
 | <sub>`get_drive_file_permissions`</sub> | <sub>Complete</sub> | <sub>Get detailed file permissions</sub> |
 | <sub>`check_drive_file_public_access`</sub> | <sub>Complete</sub> | <sub>Check public sharing status</sub> |
 
