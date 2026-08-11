@@ -38,6 +38,111 @@ def _cache_sender(user_id: str, name: str) -> None:
     _sender_name_cache[user_id] = name
 
 
+# Domain profile index: numeric user id -> "Display Name <email>".
+# Chat identifies people only as users/<numeric id>. people.get() on that id
+# returns 200 with an empty person for anyone who is not in the caller's own
+# contacts — a colleague resolves to nothing — so the directory listing is the
+# only lookup that answers for the whole domain. Built once per process.
+_directory_index: Dict[str, str] = {}
+_directory_index_loaded = False
+
+
+async def _load_directory_index(people_service) -> Dict[str, str]:
+    """Index every domain profile by the numeric id Chat uses."""
+    global _directory_index_loaded
+    if _directory_index_loaded or not people_service:
+        return _directory_index
+
+    _directory_index_loaded = True  # one attempt per process, success or not
+    page_token = None
+    try:
+        while True:
+            params = {
+                "readMask": "names,emailAddresses,metadata",
+                "sources": ["DIRECTORY_SOURCE_TYPE_DOMAIN_PROFILE"],
+                "pageSize": 1000,
+            }
+            if page_token:
+                params["pageToken"] = page_token
+            resp = await asyncio.to_thread(
+                people_service.people().listDirectoryPeople(**params).execute
+            )
+            for person in resp.get("people", []):
+                names = person.get("names", [])
+                emails = person.get("emailAddresses", [])
+                label = names[0].get("displayName") if names else None
+                email = emails[0].get("value") if emails else None
+                if email and label:
+                    label = f"{label} <{email}>"
+                label = label or email
+                if not label:
+                    continue
+                for source in person.get("metadata", {}).get("sources", []):
+                    if source.get("id"):
+                        _directory_index[source["id"]] = label
+                resource = person.get("resourceName", "")
+                if resource.startswith("people/"):
+                    _directory_index[resource.split("/", 1)[1]] = label
+            page_token = resp.get("nextPageToken")
+            if not page_token:
+                break
+    except HttpError as e:
+        logger.debug(f"Directory index unavailable: {e}")
+    except Exception as e:
+        logger.debug(f"Directory index failed: {e}")
+
+    logger.info(f"Directory index holds {len(_directory_index)} profiles")
+    return _directory_index
+
+
+async def _resolve_user_id(people_service, user_resource: str) -> str:
+    """Resolve "users/<id>" to "Display Name <email>", or return it unchanged.
+
+    Returning the raw id is a legible answer — it is what the Chat API gave us
+    — so an unresolvable member is visibly unresolved rather than silently
+    dropped or guessed at.
+    """
+    if not user_resource:
+        return "Unknown"
+    user_id = user_resource.split("/")[-1]
+    if user_id in _sender_name_cache:
+        return _sender_name_cache[user_id]
+
+    index = await _load_directory_index(people_service)
+    label = index.get(user_id)
+    if label:
+        _cache_sender(user_id, label)
+        return label
+    return user_resource
+
+
+async def _describe_unnamed_space(
+    chat_service, people_service, space_id: str, space_type: str
+) -> str:
+    """Label a DM or group chat by its other participants."""
+    if space_type not in ("DIRECT_MESSAGE", "GROUP_CHAT") or not space_id:
+        return "Unnamed Space"
+    try:
+        resp = await asyncio.to_thread(
+            chat_service.spaces()
+            .members()
+            .list(parent=space_id, pageSize=10, filter="member.type = 'HUMAN'")
+            .execute
+        )
+    except HttpError as e:
+        logger.debug(f"Cannot name {space_id}: {e}")
+        return "Unnamed Space"
+
+    names = []
+    for m in resp.get("memberships", []):
+        label = await _resolve_user_id(people_service, (m.get("member") or {}).get("name", ""))
+        if label and not label.startswith("users/"):
+            names.append(label.split(" <")[0])
+    if not names:
+        return "Unnamed Space"
+    return "DM: " + ", ".join(names) if space_type == "DIRECT_MESSAGE" else "Group: " + ", ".join(names)
+
+
 async def _resolve_sender(people_service, sender_obj: dict) -> str:
     """Resolve a Chat message sender to a display name.
 
@@ -83,8 +188,12 @@ async def _resolve_sender(people_service, sender_obj: dict) -> str:
         except Exception as e:
             logger.debug(f"Unexpected error resolving {user_id}: {e}")
 
-    # Final fallback
-    _cache_sender(user_id, user_id)
+    # People lookups answer only for the caller's own contacts; the domain
+    # directory answers for colleagues. Do not cache a miss — the index may
+    # simply not have loaded yet.
+    resolved = await _resolve_user_id(people_service, user_id)
+    if resolved != user_id:
+        return resolved
     return user_id
 
 
@@ -148,10 +257,24 @@ def _human_membership_body(member_email: str) -> dict:
 
 
 @server.tool()
-@require_google_service("chat", "chat_spaces_readonly")
+@require_multiple_services(
+    [
+        {
+            "service_type": "chat",
+            "scopes": ["chat_spaces_readonly", "chat_memberships_readonly"],
+            "param_name": "chat_service",
+        },
+        {
+            "service_type": "people",
+            "scopes": "contacts_read",
+            "param_name": "people_service",
+        },
+    ]
+)
 @handle_http_errors("list_spaces", service_type="chat")
 async def list_spaces(
-    service,
+    chat_service,
+    people_service,
     user_google_email: str,
     page_size: int = 100,
     space_type: str = "all",  # "all", "room", "dm"
@@ -175,7 +298,9 @@ async def list_spaces(
     if filter_param:
         request_params["filter"] = filter_param
 
-    response = await asyncio.to_thread(service.spaces().list(**request_params).execute)
+    response = await asyncio.to_thread(
+        chat_service.spaces().list(**request_params).execute
+    )
 
     spaces = response.get("spaces", [])
     if not spaces:
@@ -183,9 +308,14 @@ async def list_spaces(
 
     output = [f"Found {len(spaces)} Chat spaces (type: {space_type}):"]
     for space in spaces:
-        space_name = space.get("displayName", "Unnamed Space")
         space_id = space.get("name", "")
         space_type_actual = space.get("spaceType", "UNKNOWN")
+        # Chat sets displayName only on named spaces. A DM or group chat is
+        # identified by who is in it, so name it from its members — otherwise
+        # every one of them reads "Unnamed Space" and the list is useless.
+        space_name = space.get("displayName") or await _describe_unnamed_space(
+            chat_service, people_service, space_id, space_type_actual
+        )
         output.append(f"- {space_name} (ID: {space_id}, Type: {space_type_actual})")
 
     return "\n".join(output)
@@ -1181,10 +1311,24 @@ async def find_group_chats(
 
 
 @server.tool()
-@require_google_service("chat", "chat_memberships_readonly")
+@require_multiple_services(
+    [
+        {
+            "service_type": "chat",
+            "scopes": "chat_memberships_readonly",
+            "param_name": "service",
+        },
+        {
+            "service_type": "people",
+            "scopes": "contacts_read",
+            "param_name": "people_service",
+        },
+    ]
+)
 @handle_http_errors("list_space_members", is_read_only=True, service_type="chat")
 async def list_space_members(
     service,
+    people_service,
     user_google_email: str,
     space_id: str,
     page_size: int = 100,
@@ -1228,7 +1372,7 @@ async def list_space_members(
     for m in memberships:
         membership_name = m.get("name", "")
         member = m.get("member") or {}
-        member_name = member.get("name", "")
+        member_name = await _resolve_user_id(people_service, member.get("name", ""))
         member_type = member.get("type", "UNKNOWN")
         role = m.get("role", "")
         state = m.get("state", "")
