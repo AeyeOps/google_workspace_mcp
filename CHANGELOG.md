@@ -32,6 +32,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   resolve the server-assigned `groups/<id>` internally.
 
 ### Fixed
+- **`search_groups` rejected its own default.** Cloud Identity does not accept
+  the `my_customer` alias the Admin SDK takes, so every call with the default
+  `customer_id` returned `400 Request contains an invalid argument`. The alias
+  is now exchanged for the account's real `C…` id through the Admin SDK before
+  it reaches the query.
 - **Chat showed numeric ids instead of people.** `list_space_members` printed
   `users/<id>` verbatim, and `list_spaces` labelled every DM and group chat
   "Unnamed Space" because Chat sets `displayName` only on named spaces. Both now

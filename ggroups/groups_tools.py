@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Optional
 
 from mcp import Resource
 
-from auth.service_decorator import require_google_service
+from auth.service_decorator import require_google_service, require_multiple_services
 from core.server import server
 from core.utils import UserInputError, handle_http_errors
 
@@ -37,6 +37,21 @@ DISCUSSION_FORUM_LABEL = "cloudidentity.googleapis.com/groups.discussion_forum"
 
 def _customer_query(customer_id: str) -> str:
     return f"parent == 'customers/{customer_id}' && '{DISCUSSION_FORUM_LABEL}' in labels"
+
+
+async def _resolve_customer_id(directory_service: Resource, user_email: str) -> str:
+    """Return the account's real customer ID.
+
+    Cloud Identity rejects the ``my_customer`` alias the Admin SDK accepts, so
+    the alias has to be exchanged for the ``C…`` id before it reaches a query.
+    """
+    user = await asyncio.to_thread(
+        directory_service.users().get(userKey=user_email, projection="basic").execute
+    )
+    customer_id = user.get("customerId")
+    if not customer_id:
+        raise UserInputError(f"No customer ID on the directory record for {user_email}.")
+    return customer_id
 
 
 def _format_group(group: Dict[str, Any]) -> str:
@@ -68,10 +83,24 @@ async def _resolve_group_name(service: Resource, group_email: str) -> str:
 
 
 @server.tool()
-@require_google_service("cloudidentity", "groups_read")
+@require_multiple_services(
+    [
+        {
+            "service_type": "cloudidentity",
+            "scopes": "groups_read",
+            "param_name": "service",
+        },
+        {
+            "service_type": "admindirectory",
+            "scopes": "directory_users_read",
+            "param_name": "directory_service",
+        },
+    ]
+)
 @handle_http_errors("search_groups", service_type="cloudidentity")
 async def search_groups(
     service: Resource,
+    directory_service: Resource,
     user_google_email: str,
     customer_id: str = "my_customer",
     query: Optional[str] = None,
@@ -83,7 +112,7 @@ async def search_groups(
 
     Args:
         user_google_email (str): The user's Google email address. Required.
-        customer_id (str): Workspace customer ID, or "my_customer" for the caller's own.
+        customer_id (str): Workspace customer ID; "my_customer" resolves the caller's own.
         query (Optional[str]): Case-insensitive substring matched against display name and address.
         page_size (int): Maximum groups to return per page (default 200, max 500).
         page_token (Optional[str]): Token for pagination.
@@ -96,6 +125,9 @@ async def search_groups(
     if page_size < 1:
         raise UserInputError("page_size must be >= 1")
     page_size = min(page_size, 500)
+
+    if customer_id == "my_customer":
+        customer_id = await _resolve_customer_id(directory_service, user_google_email)
 
     params: Dict[str, Any] = {
         "query": _customer_query(customer_id),
