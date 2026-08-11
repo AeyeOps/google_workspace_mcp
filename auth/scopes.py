@@ -75,6 +75,12 @@ CONTACTS_OTHER_READONLY_SCOPE = (
 )
 DIRECTORY_READONLY_SCOPE = "https://www.googleapis.com/auth/directory.readonly"
 
+# Cloud Identity Groups API scopes. Group membership is the authorization
+# substrate behind Workspace SSO, and directory.readonly cannot see it —
+# it exposes people, not the groups that gate an app.
+GROUPS_READONLY_SCOPE = "https://www.googleapis.com/auth/cloud-identity.groups.readonly"
+GROUPS_SCOPE = "https://www.googleapis.com/auth/cloud-identity.groups"
+
 # Google Custom Search API scope
 CUSTOM_SEARCH_SCOPE = "https://www.googleapis.com/auth/cse"
 
@@ -191,6 +197,8 @@ CONTACTS_SCOPES = [
     DIRECTORY_READONLY_SCOPE,
 ]
 
+GROUPS_SCOPES = [GROUPS_SCOPE, GROUPS_READONLY_SCOPE]
+
 CUSTOM_SEARCH_SCOPES = [CUSTOM_SEARCH_SCOPE]
 
 SCRIPT_SCOPES = [
@@ -215,6 +223,7 @@ TOOL_SCOPES_MAP = {
     "slides": SLIDES_SCOPES,
     "tasks": TASKS_SCOPES,
     "contacts": CONTACTS_SCOPES,
+    "groups": GROUPS_SCOPES,
     "search": CUSTOM_SEARCH_SCOPES,
     "appscript": SCRIPT_SCOPES,
 }
@@ -239,6 +248,7 @@ TOOL_READONLY_SCOPES_MAP = {
         CONTACTS_OTHER_READONLY_SCOPE,
         DIRECTORY_READONLY_SCOPE,
     ],
+    "groups": [GROUPS_READONLY_SCOPE],
     "search": CUSTOM_SEARCH_SCOPES,
     "appscript": [
         SCRIPT_PROJECTS_READONLY_SCOPE,
