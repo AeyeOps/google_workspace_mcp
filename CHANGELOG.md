@@ -21,6 +21,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   into a user-owned folder without copying or moving originals. The MCP
   already dereferences shortcuts on read via `resolve_drive_item`; this
   closes the corresponding write-side gap.
+- **Google Groups tools** — adds `search_groups`, `get_group`,
+  `list_group_members`, `list_member_groups`, and `manage_group_member` on the
+  Cloud Identity Groups API. Group membership is what an identity provider
+  replicates and what an application reads from a token, so it answers "who can
+  reach this?" — a question the People/Directory surface cannot address, since
+  it exposes people rather than the groups gating them. Reads take
+  `cloud-identity.groups.readonly`; only the membership write takes
+  `cloud-identity.groups`. Callers pass a group address throughout and the tools
+  resolve the server-assigned `groups/<id>` internally.
+
+### Fixed
+- **Chat showed numeric ids instead of people.** `list_space_members` printed
+  `users/<id>` verbatim, and `list_spaces` labelled every DM and group chat
+  "Unnamed Space" because Chat sets `displayName` only on named spaces. Both now
+  resolve identities, and an unnamed DM or group chat is labelled by its members.
+- **Sender resolution never worked for colleagues.** `_resolve_sender` fell back
+  to `people.get(people/<id>)`, which returns `200` with an empty person for
+  anyone outside the caller's own contacts; the code read that empty result, fell
+  through, and cached the raw id as the answer. Resolution now uses Admin SDK
+  Directory `users.get`, and misses are no longer cached.
+- **The People directory surface is unusable when a domain disables external
+  directory sharing**, which `403`s `searchDirectoryPeople` and
+  `listDirectoryPeople` for every caller in that domain. Chat identity therefore
+  depends on `admin.directory.user.readonly` rather than `directory.readonly`.
+  `search_directory_people` remains subject to the same domain setting.
+- **Tools could load but never register.** `core/tool_tiers.yaml` is an
+  allowlist: with `--tool-tier` set, a service imports and its tools are dropped
+  unless listed there. The group tools are now registered across the tiers.
 
 ## [1.20.0] — 2026-04-20
 
