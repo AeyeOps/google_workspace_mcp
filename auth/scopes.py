@@ -81,6 +81,13 @@ DIRECTORY_READONLY_SCOPE = "https://www.googleapis.com/auth/directory.readonly"
 GROUPS_READONLY_SCOPE = "https://www.googleapis.com/auth/cloud-identity.groups.readonly"
 GROUPS_SCOPE = "https://www.googleapis.com/auth/cloud-identity.groups"
 
+# Admin SDK Directory. The People directory surface is unavailable whenever a
+# Workspace domain disables external directory sharing, which 403s every
+# caller in the domain; the Admin SDK resolves a user id regardless.
+ADMIN_DIRECTORY_USER_READONLY_SCOPE = (
+    "https://www.googleapis.com/auth/admin.directory.user.readonly"
+)
+
 # Google Custom Search API scope
 CUSTOM_SEARCH_SCOPE = "https://www.googleapis.com/auth/cse"
 
@@ -218,7 +225,7 @@ TOOL_SCOPES_MAP = {
     "calendar": CALENDAR_SCOPES,
     "docs": DOCS_SCOPES,
     "sheets": SHEETS_SCOPES,
-    "chat": CHAT_SCOPES,
+    "chat": CHAT_SCOPES + [ADMIN_DIRECTORY_USER_READONLY_SCOPE],
     "forms": FORMS_SCOPES,
     "slides": SLIDES_SCOPES,
     "tasks": TASKS_SCOPES,
@@ -239,6 +246,7 @@ TOOL_READONLY_SCOPES_MAP = {
         CHAT_READONLY_SCOPE,
         CHAT_SPACES_READONLY_SCOPE,
         CHAT_MEMBERSHIPS_READONLY_SCOPE,
+        ADMIN_DIRECTORY_USER_READONLY_SCOPE,
     ],
     "forms": [FORMS_BODY_READONLY_SCOPE, FORMS_RESPONSES_READONLY_SCOPE],
     "slides": [SLIDES_READONLY_SCOPE],

@@ -38,64 +38,38 @@ def _cache_sender(user_id: str, name: str) -> None:
     _sender_name_cache[user_id] = name
 
 
-# Domain profile index: numeric user id -> "Display Name <email>".
-# Chat identifies people only as users/<numeric id>. people.get() on that id
-# returns 200 with an empty person for anyone who is not in the caller's own
-# contacts — a colleague resolves to nothing — so the directory listing is the
-# only lookup that answers for the whole domain. Built once per process.
+# Chat identifies people only as users/<numeric id>. Two lookups could turn
+# that into a name, and only one of them is dependable: the People directory
+# surface 403s for every caller whenever a Workspace domain disables external
+# directory sharing, while the Admin SDK resolves the id regardless. Results
+# are cached per process; misses are not, since a miss is usually a missing
+# scope rather than a missing person.
 _directory_index: Dict[str, str] = {}
-_directory_index_loaded = False
 
 
-async def _load_directory_index(people_service) -> Dict[str, str]:
-    """Index every domain profile by the numeric id Chat uses."""
-    global _directory_index_loaded
-    if _directory_index_loaded or not people_service:
-        return _directory_index
-
-    _directory_index_loaded = True  # one attempt per process, success or not
-    page_token = None
+async def _lookup_directory_user(directory_service, user_id: str) -> Optional[str]:
+    """Resolve a numeric user id to "Display Name <email>" via the Admin SDK."""
+    if not directory_service or not user_id:
+        return None
     try:
-        while True:
-            params = {
-                "readMask": "names,emailAddresses,metadata",
-                "sources": ["DIRECTORY_SOURCE_TYPE_DOMAIN_PROFILE"],
-                "pageSize": 1000,
-            }
-            if page_token:
-                params["pageToken"] = page_token
-            resp = await asyncio.to_thread(
-                people_service.people().listDirectoryPeople(**params).execute
-            )
-            for person in resp.get("people", []):
-                names = person.get("names", [])
-                emails = person.get("emailAddresses", [])
-                label = names[0].get("displayName") if names else None
-                email = emails[0].get("value") if emails else None
-                if email and label:
-                    label = f"{label} <{email}>"
-                label = label or email
-                if not label:
-                    continue
-                for source in person.get("metadata", {}).get("sources", []):
-                    if source.get("id"):
-                        _directory_index[source["id"]] = label
-                resource = person.get("resourceName", "")
-                if resource.startswith("people/"):
-                    _directory_index[resource.split("/", 1)[1]] = label
-            page_token = resp.get("nextPageToken")
-            if not page_token:
-                break
+        user = await asyncio.to_thread(
+            directory_service.users().get(userKey=user_id).execute
+        )
     except HttpError as e:
-        logger.debug(f"Directory index unavailable: {e}")
+        logger.debug(f"Directory lookup failed for {user_id}: {e}")
+        return None
     except Exception as e:
-        logger.debug(f"Directory index failed: {e}")
+        logger.debug(f"Directory lookup error for {user_id}: {e}")
+        return None
 
-    logger.info(f"Directory index holds {len(_directory_index)} profiles")
-    return _directory_index
+    email = user.get("primaryEmail")
+    name = (user.get("name") or {}).get("fullName")
+    if name and email:
+        return f"{name} <{email}>"
+    return name or email
 
 
-async def _resolve_user_id(people_service, user_resource: str) -> str:
+async def _resolve_user_id(directory_service, user_resource: str) -> str:
     """Resolve "users/<id>" to "Display Name <email>", or return it unchanged.
 
     Returning the raw id is a legible answer — it is what the Chat API gave us
@@ -108,8 +82,7 @@ async def _resolve_user_id(people_service, user_resource: str) -> str:
     if user_id in _sender_name_cache:
         return _sender_name_cache[user_id]
 
-    index = await _load_directory_index(people_service)
-    label = index.get(user_id)
+    label = await _lookup_directory_user(directory_service, user_id)
     if label:
         _cache_sender(user_id, label)
         return label
@@ -117,7 +90,7 @@ async def _resolve_user_id(people_service, user_resource: str) -> str:
 
 
 async def _describe_unnamed_space(
-    chat_service, people_service, space_id: str, space_type: str
+    chat_service, directory_service, space_id: str, space_type: str
 ) -> str:
     """Label a DM or group chat by its other participants."""
     if space_type not in ("DIRECT_MESSAGE", "GROUP_CHAT") or not space_id:
@@ -135,7 +108,7 @@ async def _describe_unnamed_space(
 
     names = []
     for m in resp.get("memberships", []):
-        label = await _resolve_user_id(people_service, (m.get("member") or {}).get("name", ""))
+        label = await _resolve_user_id(directory_service, (m.get("member") or {}).get("name", ""))
         if label and not label.startswith("users/"):
             names.append(label.split(" <")[0])
     if not names:
@@ -143,11 +116,11 @@ async def _describe_unnamed_space(
     return "DM: " + ", ".join(names) if space_type == "DIRECT_MESSAGE" else "Group: " + ", ".join(names)
 
 
-async def _resolve_sender(people_service, sender_obj: dict) -> str:
+async def _resolve_sender(directory_service, sender_obj: dict) -> str:
     """Resolve a Chat message sender to a display name.
 
-    Fast path: use displayName if the API already provided it.
-    Slow path: look up the user via the People API directory and cache the result.
+    Chat supplies displayName on some payloads and only a numeric id on others;
+    the id goes to the Admin SDK.
     """
     # Fast path — Chat API sometimes provides displayName directly
     display_name = sender_obj.get("displayName")
@@ -162,36 +135,7 @@ async def _resolve_sender(people_service, sender_obj: dict) -> str:
     if user_id in _sender_name_cache:
         return _sender_name_cache[user_id]
 
-    # Try People API directory lookup
-    # Chat API uses "users/ID" but People API expects "people/ID"
-    people_resource = user_id.replace("users/", "people/", 1)
-    if people_service:
-        try:
-            person = await asyncio.to_thread(
-                people_service.people()
-                .get(resourceName=people_resource, personFields="names,emailAddresses")
-                .execute
-            )
-            names = person.get("names", [])
-            if names:
-                resolved = names[0].get("displayName", user_id)
-                _cache_sender(user_id, resolved)
-                return resolved
-            # Fall back to email if no name
-            emails = person.get("emailAddresses", [])
-            if emails:
-                resolved = emails[0].get("value", user_id)
-                _cache_sender(user_id, resolved)
-                return resolved
-        except HttpError as e:
-            logger.debug(f"People API lookup failed for {user_id}: {e}")
-        except Exception as e:
-            logger.debug(f"Unexpected error resolving {user_id}: {e}")
-
-    # People lookups answer only for the caller's own contacts; the domain
-    # directory answers for colleagues. Do not cache a miss — the index may
-    # simply not have loaded yet.
-    resolved = await _resolve_user_id(people_service, user_id)
+    resolved = await _resolve_user_id(directory_service, user_id)
     if resolved != user_id:
         return resolved
     return user_id
@@ -265,16 +209,16 @@ def _human_membership_body(member_email: str) -> dict:
             "param_name": "chat_service",
         },
         {
-            "service_type": "people",
-            "scopes": "contacts_read",
-            "param_name": "people_service",
+            "service_type": "admindirectory",
+            "scopes": "directory_users_read",
+            "param_name": "directory_service",
         },
     ]
 )
 @handle_http_errors("list_spaces", service_type="chat")
 async def list_spaces(
     chat_service,
-    people_service,
+    directory_service,
     user_google_email: str,
     page_size: int = 100,
     space_type: str = "all",  # "all", "room", "dm"
@@ -314,7 +258,7 @@ async def list_spaces(
         # identified by who is in it, so name it from its members — otherwise
         # every one of them reads "Unnamed Space" and the list is useless.
         space_name = space.get("displayName") or await _describe_unnamed_space(
-            chat_service, people_service, space_id, space_type_actual
+            chat_service, directory_service, space_id, space_type_actual
         )
         output.append(f"- {space_name} (ID: {space_id}, Type: {space_type_actual})")
 
@@ -326,16 +270,16 @@ async def list_spaces(
     [
         {"service_type": "chat", "scopes": "chat_read", "param_name": "chat_service"},
         {
-            "service_type": "people",
-            "scopes": "contacts_read",
-            "param_name": "people_service",
+            "service_type": "admindirectory",
+            "scopes": "directory_users_read",
+            "param_name": "directory_service",
         },
     ]
 )
 @handle_http_errors("get_messages", service_type="chat")
 async def get_messages(
     chat_service,
-    people_service,
+    directory_service,
     user_google_email: str,
     space_id: str,
     page_size: int = 50,
@@ -384,7 +328,7 @@ async def get_messages(
         if key and key not in sender_lookup:
             sender_lookup[key] = s
     resolved_names = await asyncio.gather(
-        *[_resolve_sender(people_service, s) for s in sender_lookup.values()]
+        *[_resolve_sender(directory_service, s) for s in sender_lookup.values()]
     )
     sender_map = dict(zip(sender_lookup.keys(), resolved_names))
 
@@ -393,7 +337,7 @@ async def get_messages(
         sender_obj = msg.get("sender", {})
         sender_key = sender_obj.get("name", "")
         sender = sender_map.get(sender_key) or await _resolve_sender(
-            people_service, sender_obj
+            directory_service, sender_obj
         )
         create_time = msg.get("createTime", "Unknown Time")
         text_content = msg.get("text", "No text content")
@@ -491,16 +435,16 @@ async def send_message(
     [
         {"service_type": "chat", "scopes": "chat_read", "param_name": "chat_service"},
         {
-            "service_type": "people",
-            "scopes": "contacts_read",
-            "param_name": "people_service",
+            "service_type": "admindirectory",
+            "scopes": "directory_users_read",
+            "param_name": "directory_service",
         },
     ]
 )
 @handle_http_errors("search_messages", is_read_only=True, service_type="chat")
 async def search_messages(
     chat_service,
-    people_service,
+    directory_service,
     user_google_email: str,
     query: Optional[str] = None,
     space_id: Optional[str] = None,
@@ -634,14 +578,14 @@ async def search_messages(
             sender_lookup[key] = s
     sender_map = {}
     for key, sender_obj in sender_lookup.items():
-        sender_map[key] = await _resolve_sender(people_service, sender_obj)
+        sender_map[key] = await _resolve_sender(directory_service, sender_obj)
 
     output = [f"Found {len(messages)} messages matching '{search_desc}' in {context}:"]
     for msg in messages:
         sender_obj = msg.get("sender", {})
         sender_key = sender_obj.get("name", "")
         sender = sender_map.get(sender_key) or await _resolve_sender(
-            people_service, sender_obj
+            directory_service, sender_obj
         )
         create_time = msg.get("createTime", "Unknown Time")
         text_content = msg.get("text", "No text content")
@@ -1319,16 +1263,16 @@ async def find_group_chats(
             "param_name": "service",
         },
         {
-            "service_type": "people",
-            "scopes": "contacts_read",
-            "param_name": "people_service",
+            "service_type": "admindirectory",
+            "scopes": "directory_users_read",
+            "param_name": "directory_service",
         },
     ]
 )
 @handle_http_errors("list_space_members", is_read_only=True, service_type="chat")
 async def list_space_members(
     service,
-    people_service,
+    directory_service,
     user_google_email: str,
     space_id: str,
     page_size: int = 100,
@@ -1372,7 +1316,7 @@ async def list_space_members(
     for m in memberships:
         membership_name = m.get("name", "")
         member = m.get("member") or {}
-        member_name = await _resolve_user_id(people_service, member.get("name", ""))
+        member_name = await _resolve_user_id(directory_service, member.get("name", ""))
         member_type = member.get("type", "UNKNOWN")
         role = m.get("role", "")
         state = m.get("state", "")

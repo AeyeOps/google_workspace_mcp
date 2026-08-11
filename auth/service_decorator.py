@@ -67,6 +67,7 @@ from auth.scopes import (
     DIRECTORY_READONLY_SCOPE,
     GROUPS_READONLY_SCOPE,
     GROUPS_SCOPE,
+    ADMIN_DIRECTORY_USER_READONLY_SCOPE,
     CUSTOM_SEARCH_SCOPE,
     SCRIPT_PROJECTS_SCOPE,
     SCRIPT_PROJECTS_READONLY_SCOPE,
@@ -523,6 +524,7 @@ SERVICE_CONFIGS = {
     "customsearch": {"service": "customsearch", "version": "v1"},
     "script": {"service": "script", "version": "v1"},
     "cloudidentity": {"service": "cloudidentity", "version": "v1"},
+    "admindirectory": {"service": "admin", "version": "directory_v1"},
 }
 
 
@@ -575,6 +577,7 @@ SCOPE_GROUPS = {
     # Cloud Identity Groups scopes
     "groups_read": GROUPS_READONLY_SCOPE,
     "groups_write": GROUPS_SCOPE,
+    "directory_users_read": ADMIN_DIRECTORY_USER_READONLY_SCOPE,
     # Custom Search scope
     "customsearch": CUSTOM_SEARCH_SCOPE,
     # Apps Script scopes
