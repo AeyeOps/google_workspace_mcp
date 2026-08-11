@@ -171,6 +171,16 @@ contacts:
     - manage_contacts_batch
     - manage_contact_group
 
+groups:
+  core:
+    - search_groups
+    - list_group_members
+    - list_member_groups
+  extended:
+    - get_group
+  complete:
+    - manage_group_member
+
 search:
   core:
     - search_custom
